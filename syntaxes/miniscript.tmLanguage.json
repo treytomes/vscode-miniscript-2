@@ -1,0 +1,171 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "MiniScript",
+  "scopeName": "source.miniscript",
+  "fileTypes": ["ms"],
+  "patterns": [
+    { "include": "#shebang" },
+    { "include": "#comments" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#block-keywords" },
+    { "include": "#function-definition" },
+    { "include": "#keywords" },
+    { "include": "#constants" },
+    { "include": "#special-variables" },
+    { "include": "#property-access" },
+    { "include": "#function-call" },
+    { "include": "#punctuation" },
+    { "include": "#operators" }
+  ],
+  "repository": {
+    "shebang": {
+      "match": "\\A#!.*",
+      "name": "comment.line.shebang.miniscript"
+    },
+    "comments": {
+      "match": "//.*$",
+      "name": "comment.line.double-slash.miniscript"
+    },
+    "strings": {
+      "patterns": [
+        {
+          "match": "\"(?:[^\"]|\"\")*\"",
+          "name": "string.quoted.double.miniscript"
+        },
+        {
+          "match": "\"[^\"\\n]*$",
+          "name": "invalid.illegal.unterminated-string.miniscript"
+        }
+      ]
+    },
+    "numbers": {
+      "match": "(?<![\\w.])\\d+(?:\\.\\d+)?(?:[eE][+-]?\\d+)?",
+      "name": "constant.numeric.miniscript"
+    },
+    "block-keywords": {
+      "patterns": [
+        {
+          "match": "\\bend\\s+(if|for|while|function)\\b",
+          "name": "keyword.control.block.miniscript"
+        },
+        {
+          "match": "\\bend\\b",
+          "name": "keyword.control.block.miniscript"
+        }
+      ]
+    },
+    "function-definition": {
+      "begin": "\\b(function)\\b(?=\\s*\\()",
+      "beginCaptures": {
+        "1": { "name": "storage.type.function.miniscript" }
+      },
+      "end": "\\)",
+      "endCaptures": {
+        "0": { "name": "punctuation.definition.parameters.end.miniscript" }
+      },
+      "patterns": [
+        { "include": "#comments" },
+        { "include": "#strings" },
+        { "include": "#numbers" },
+        { "include": "#operators" },
+        {
+          "match": "[A-Za-z_][A-Za-z0-9_]*",
+          "name": "variable.parameter.miniscript"
+        },
+        {
+          "match": ",",
+          "name": "punctuation.separator.parameter.miniscript"
+        },
+        {
+          "match": "\\(",
+          "name": "punctuation.definition.parameters.begin.miniscript"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "match": "\\b(if|then|else|for|in|while|break|continue|return|import|end)\\b",
+          "name": "keyword.control.miniscript"
+        },
+        {
+          "match": "\\bfunction\\b",
+          "name": "storage.type.function.miniscript"
+        },
+        {
+          "match": "\\bnew\\b",
+          "name": "keyword.other.new.miniscript"
+        },
+        {
+          "match": "\\bfreeze\\b",
+          "name": "keyword.other.freeze.miniscript"
+        },
+        {
+          "match": "\\b(and|or|not)\\b",
+          "name": "keyword.operator.logical.miniscript"
+        },
+        {
+          "match": "\\b(is|isa)\\b",
+          "name": "keyword.operator.comparison.miniscript"
+        }
+      ]
+    },
+    "constants": {
+      "match": "\\b(true|false|null)\\b",
+      "name": "constant.language.miniscript"
+    },
+    "special-variables": {
+      "match": "\\b(globals|locals|outer|self|super|intrinsics)\\b",
+      "name": "variable.language.miniscript"
+    },
+    "property-access": {
+      "match": "\\.\\s*([A-Za-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "variable.other.property.miniscript" }
+      }
+    },
+    "function-call": {
+      "match": "\\b([A-Za-z_][A-Za-z0-9_]*)(?=\\s*\\()",
+      "captures": {
+        "1": { "name": "entity.name.function.miniscript" }
+      }
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[,;:]",
+          "name": "punctuation.separator.miniscript"
+        },
+        {
+          "match": "[()\\[\\]{}]",
+          "name": "punctuation.section.miniscript"
+        }
+      ]
+    },
+    "operators": {
+      "patterns": [
+        {
+          "match": "\\+=|-=|\\*=|/=|%=|\\^=",
+          "name": "keyword.operator.assignment.compound.miniscript"
+        },
+        {
+          "match": "==|!=|<=|>=|<|>",
+          "name": "keyword.operator.comparison.miniscript"
+        },
+        {
+          "match": "=(?!=)",
+          "name": "keyword.operator.assignment.miniscript"
+        },
+        {
+          "match": "@",
+          "name": "keyword.operator.reference.miniscript"
+        },
+        {
+          "match": "[-+*/%^]",
+          "name": "keyword.operator.arithmetic.miniscript"
+        }
+      ]
+    }
+  }
+}

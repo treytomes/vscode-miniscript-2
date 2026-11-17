@@ -1,0 +1,70 @@
+{
+  "name": "miniscript2",
+  "displayName": "MiniScript 2",
+  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting and a run button for .ms files.",
+  "version": "0.3.0",
+  "publisher": "micro-expert",
+  "private": true,
+  "license": "MIT",
+  "main": "./extension.js",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Programming Languages"
+  ],
+  "keywords": [
+    "miniscript",
+    "miniscript 2",
+    "ms"
+  ],
+  "contributes": {
+    "languages": [
+      {
+        "id": "miniscript",
+        "aliases": [
+          "MiniScript",
+          "MiniScript 2",
+          "miniscript"
+        ],
+        "extensions": [
+          ".ms"
+        ],
+        "configuration": "./language-configuration.json"
+      }
+    ],
+    "grammars": [
+      {
+        "language": "miniscript",
+        "scopeName": "source.miniscript",
+        "path": "./syntaxes/miniscript.tmLanguage.json"
+      }
+    ],
+    "commands": [
+      {
+        "command": "miniscript2.runFile",
+        "title": "Run MiniScript File",
+        "icon": "$(play)"
+      }
+    ],
+    "menus": {
+      "editor/title": [
+        {
+          "command": "miniscript2.runFile",
+          "when": "resourceLangId == miniscript",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "MiniScript 2",
+      "properties": {
+        "miniscript2.interpreterPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the MiniScript interpreter. Leave empty to use MINISCRIPT_EXE_PATH from the project's .env, then \"miniscript\" on PATH."
+        }
+      }
+    }
+  }
+}
