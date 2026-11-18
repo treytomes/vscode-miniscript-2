@@ -1,0 +1,382 @@
+// The suite in VS Code's Testing panel.
+//
+// The suite is a MiniScript program, so it is discovered by running it once: with
+// --json, the suite's harness prints a `##TEST {...}` line per check (its name, status,
+// file and line) and a closing `##END {...}` line. Those records become the items in the
+// Test Explorer, and a run is the same program narrowed by --filter (a substring of a
+// check's name) and --file (a case module).
+
+const { spawn } = require("child_process");
+const fs = require("fs");
+const path = require("path");
+const vscode = require("vscode");
+
+const DEFAULT_SUITE = "test/run.ms";
+
+function parseRecord(text) {
+	try {
+		const value = JSON.parse(text);
+		return value && typeof value === "object" ? value : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+// Runs `suite` in `folder`, handing every line to `onLine` with its parsed record for a
+// ##TEST line and undefined for anything else. Resolves with the ##END totals (absent
+// when the run stopped early), the exit code, any spawn error and whatever went to
+// stderr.
+function spawnSuite({ command, suite, folder, args, token, onLine }) {
+	return new Promise((resolve) => {
+		let child;
+		try {
+			child = spawn(command, [suite, ...args], { cwd: folder, windowsHide: true });
+		} catch (error) {
+			resolve({ error });
+			return;
+		}
+
+		let end;
+		let buffer = "";
+		let stderr = "";
+		let settled = false;
+
+		const handle = (line) => {
+			if (line.startsWith("##TEST ")) {
+				onLine(line, parseRecord(line.slice(7)));
+				return;
+			}
+			if (line.startsWith("##END ")) {
+				end = parseRecord(line.slice(6)) || {};
+				return;
+			}
+			onLine(line, undefined);
+		};
+
+		const read = (chunk) => {
+			buffer += chunk;
+			let at;
+			while ((at = buffer.indexOf("\n")) >= 0) {
+				handle(buffer.slice(0, at).replace(/\r$/, ""));
+				buffer = buffer.slice(at + 1);
+			}
+		};
+
+		const cancellation = token
+			? token.onCancellationRequested(() => child.kill())
+			: undefined;
+
+		const finish = (code, error) => {
+			if (settled) return;
+			settled = true;
+			if (cancellation) cancellation.dispose();
+			if (buffer) {
+				handle(buffer.replace(/\r$/, ""));
+				buffer = "";
+			}
+			resolve({ end, code, error, stderr });
+		};
+
+		child.stdout.setEncoding("utf8");
+		child.stderr.setEncoding("utf8");
+		child.stdout.on("data", read);
+		child.stderr.on("data", (chunk) => {
+			stderr += chunk;
+		});
+		child.on("error", (error) => finish(undefined, error));
+		child.on("close", (code) => finish(code));
+	});
+}
+
+// resolveInterpreter(dir) comes from extension.js, so the parser, the logger and the
+// tests all find the interpreter the same way.
+function register(context, { resolveInterpreter }) {
+	const controller = vscode.tests.createTestController("miniscript2", "MiniScript 2");
+	context.subscriptions.push(controller);
+
+	// item -> { folder, suite, file, line, name }, and workspace folder -> its group.
+	const details = new WeakMap();
+	const groups = new Map();
+
+	function suitePath(folder) {
+		const configured = String(
+			vscode.workspace
+				.getConfiguration("miniscript2", folder.uri)
+				.get("testSuite", DEFAULT_SUITE) || ""
+		).trim();
+		return path.resolve(folder.uri.fsPath, configured || DEFAULT_SUITE);
+	}
+
+	async function sourcePath(folder, suite, name, group) {
+		if (!name) return undefined;
+		if (group.paths.has(name)) return group.paths.get(name);
+		const beside = path.join(path.dirname(suite), name);
+		let found = beside;
+		if (!fs.existsSync(beside)) {
+			// Module names are basenames, so a case module away from the suite is looked
+			// up by name; the first match wins.
+			const matches = await vscode.workspace.findFiles(
+				new vscode.RelativePattern(folder, `**/${name}`),
+				"**/node_modules/**",
+				1
+			);
+			found = matches.length ? matches[0].fsPath : undefined;
+		}
+		group.paths.set(name, found);
+		return found;
+	}
+
+	async function discover(folder, suite) {
+		const root = controller.createTestItem(
+			`folder:${folder.uri.fsPath}`,
+			folder.name,
+			folder.uri
+		);
+		details.set(root, { folder, suite });
+		controller.items.add(root);
+
+		const group = {
+			root,
+			folder,
+			suite,
+			byName: new Map(),
+			files: new Map(),
+			paths: new Map(),
+		};
+		groups.set(folder.uri.fsPath, group);
+
+		const interpreter = resolveInterpreter(folder.uri.fsPath);
+		if (interpreter.problem) return;
+
+		const records = [];
+		const result = await spawnSuite({
+			command: interpreter.command,
+			suite,
+			folder: folder.uri.fsPath,
+			args: ["--json"],
+			onLine: (line, record) => {
+				if (record && record.name) records.push(record);
+			},
+		});
+		if (result.error) return;
+
+		const used = new Set();
+		for (const record of records) {
+			const file = await sourcePath(folder, suite, record.file, group);
+			const line = typeof record.line === "number" ? record.line : 0;
+			const uri = file ? vscode.Uri.file(file) : undefined;
+			const key = `${record.file}|${line}|${record.name}`;
+
+			let fileItem = group.files.get(file || record.file || "");
+			if (!fileItem) {
+				fileItem = controller.createTestItem(
+					`file:${file || record.file || "suite"}`,
+					file ? path.basename(file) : record.file || "suite",
+					uri
+				);
+				details.set(fileItem, { folder, suite, file });
+				group.files.set(file || record.file || "", fileItem);
+				root.children.add(fileItem);
+			}
+
+			let id = `test:${key}`;
+			for (let n = 2; used.has(id); n += 1) id = `test:${key}#${n}`;
+			used.add(id);
+
+			const test = controller.createTestItem(id, record.name, uri);
+			if (line > 0) test.range = new vscode.Range(line - 1, 0, line - 1, 0);
+			details.set(test, { folder, suite, file, line, name: record.name });
+			fileItem.children.add(test);
+			const named = group.byName.get(record.name) || [];
+			named.push(test);
+			group.byName.set(record.name, named);
+		}
+	}
+
+	controller.resolveHandler = async (item) => {
+		if (item) return;
+		for (const folder of vscode.workspace.workspaceFolders || []) {
+			const suite = suitePath(folder);
+			if (suite && fs.existsSync(suite)) await discover(folder, suite);
+		}
+	};
+
+	function* everyItem(group) {
+		for (const fileItem of group.files.values()) {
+			for (const child of fileItem.children) yield child;
+		}
+	}
+
+	function failMessage(item, record) {
+		const message = new vscode.TestMessage(`FAIL  ${record.name}`);
+		if (item.uri) {
+			message.location = new vscode.Location(
+				item.uri,
+				item.range || new vscode.Range(0, 0, 0, 0)
+			);
+		}
+		return message;
+	}
+
+	function collect(request) {
+		const targets = new Map();
+		const target = (folder, group) => {
+			let found = targets.get(folder.uri.fsPath);
+			if (!found) {
+				found = {
+					group,
+					all: false,
+					items: new Set(),
+					filters: new Set(),
+					files: new Set(),
+				};
+				targets.set(folder.uri.fsPath, found);
+			}
+			return found;
+		};
+
+		const included = request.include ? [...request.include] : [];
+		for (const item of included) {
+			const detail = details.get(item);
+			if (!detail) continue;
+			const group = groups.get(detail.folder.uri.fsPath);
+			if (!group) continue;
+			const found = target(detail.folder, group);
+			if (item === group.root) {
+				found.all = true;
+			} else if (detail.name === undefined) {
+				if (detail.file) found.files.add(path.basename(detail.file));
+				for (const child of item.children) found.items.add(child);
+			} else {
+				found.filters.add(detail.name);
+				found.items.add(item);
+			}
+		}
+
+		if (included.length === 0) {
+			for (const group of groups.values()) {
+				targets.set(group.folder.uri.fsPath, {
+					group,
+					all: true,
+					items: new Set(),
+					filters: new Set(),
+					files: new Set(),
+				});
+			}
+		}
+		return [...targets.values()];
+	}
+
+	// A discovered check's line is only as fresh as the last discovery, so editing a case
+	// file shifts every record after the edit. Match on the name, preferring an item known
+	// at the reported line and then in the reported file, so two checks that share a name
+	// stay apart; then move that item to the line the check reported itself at, which keeps
+	// the gutter on the check and the next run's match exact.
+	function locate(group, record, taken) {
+		const free = (group.byName.get(record.name) || []).filter((seen) => !taken.has(seen));
+		if (!free.length) return undefined;
+
+		const where = (item) => details.get(item) || {};
+		const item =
+			free.find((candidate) => where(candidate).line === record.line) ||
+			free.find((candidate) => path.basename(where(candidate).file || "") === record.file) ||
+			free[0];
+
+		const detail = details.get(item);
+		if (detail && typeof record.line === "number" && record.line !== detail.line) {
+			detail.line = record.line;
+			item.range =
+				record.line > 0
+					? new vscode.Range(record.line - 1, 0, record.line - 1, 0)
+					: undefined;
+		}
+		return item;
+	}
+
+	async function runGroup(run, target, token) {
+		const { group } = target;
+		const interpreter = resolveInterpreter(group.folder.uri.fsPath);
+		if (interpreter.problem) {
+			const message = new vscode.TestMessage(interpreter.problem);
+			for (const item of everyItem(group)) run.errored(item, message);
+			return;
+		}
+
+		const args = ["--json"];
+		for (const file of target.files) args.push("--file", file);
+		for (const filter of target.filters) args.push("--filter", filter);
+
+		const seen = new Set();
+		const wanted = target.all ? undefined : target.items;
+		const result = await spawnSuite({
+			command: interpreter.command,
+			suite: group.suite,
+			folder: group.folder.uri.fsPath,
+			args,
+			token,
+			onLine: (text, record) => {
+				const item = record ? locate(group, record, seen) : undefined;
+				// A filter is a substring, so the suite runs the checks that merely hold
+				// the name as well: only the ones asked for get a result.
+				if (!item || (wanted && !wanted.has(item))) {
+					run.appendOutput(`${text}\r\n`);
+					return;
+				}
+				seen.add(item);
+				if (record.status === "pass") {
+					run.passed(item);
+				} else {
+					run.failed(item, failMessage(item, record));
+				}
+			},
+		});
+
+		if (result.stderr && result.stderr.trim()) {
+			run.appendOutput(result.stderr.replace(/\r?\n/g, "\r\n"));
+		}
+
+		if (token.isCancellationRequested) return;
+
+		if (!result.end) {
+			// The interpreter exits 0 even when an uncaught error stops the program, so a
+			// check with no record did not run: it is not a pass.
+			const message = new vscode.TestMessage(
+				result.error
+					? `Could not run ${interpreter.command}: ${result.error.message}`
+					: "The suite stopped before this check was recorded."
+			);
+			const affected = wanted ? [...wanted] : [...everyItem(group)];
+			for (const item of affected) {
+				if (!seen.has(item)) run.errored(item, message);
+			}
+			return;
+		}
+
+		for (const item of target.items) {
+			if (!seen.has(item)) run.skipped(item);
+		}
+	}
+
+	async function execute(request, token) {
+		const run = controller.createTestRun(request);
+		try {
+			for (const target of collect(request)) {
+				if (token.isCancellationRequested) break;
+				await runGroup(run, target, token);
+			}
+		} finally {
+			run.end();
+		}
+	}
+
+	controller.createRunProfile(
+		"Run",
+		vscode.TestRunProfileKind.Run,
+		(request, token) => execute(request, token),
+		true
+	);
+
+	return controller;
+}
+
+module.exports = { register };

@@ -1,6 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const vscode = require("vscode");
+const testing = require("./testing");
 
 const SETTING = "miniscript2.interpreterPath";
 const ENV_VAR = "MINISCRIPT_EXE_PATH";
@@ -133,6 +134,7 @@ function activate(context) {
 	context.subscriptions.push(
 		vscode.commands.registerCommand("miniscript2.runFile", runActiveFile)
 	);
+	testing.register(context, { resolveInterpreter });
 }
 
 function deactivate() {}

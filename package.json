@@ -1,15 +1,25 @@
 {
   "name": "miniscript2",
   "displayName": "MiniScript 2",
-  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting and a run button for .ms files.",
-  "version": "0.3.0",
+  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting, a run button, and the test suite in the Testing panel.",
+  "version": "0.4.0",
   "publisher": "micro-expert",
   "private": true,
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/treytomes/vscode-miniscript-2.git"
+  },
   "main": "./extension.js",
+  "scripts": {
+    "test": "node --test"
+  },
   "engines": {
     "vscode": "^1.75.0"
   },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
   "categories": [
     "Programming Languages"
   ],
@@ -63,6 +73,11 @@
           "type": "string",
           "default": "",
           "description": "Path to the MiniScript interpreter. Leave empty to use MINISCRIPT_EXE_PATH from the project's .env, then \"miniscript\" on PATH."
+        },
+        "miniscript2.testSuite": {
+          "type": "string",
+          "default": "test/run.ms",
+          "description": "The suite the Testing panel runs, relative to the workspace folder. Its harness must take --json, --filter and --file, as test/harness.ms does."
         }
       }
     }
