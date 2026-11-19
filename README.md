@@ -13,34 +13,85 @@ suite in the Testing panel.
 - **Run MiniScript File** — a play button in the editor title bar, also on the Command
   Palette. It saves the file if it is dirty, opens a terminal in the project folder and
   runs the file there.
-- **Testing panel** — the suite named by `miniscript2.testSuite` appears in the Test
-  Explorer, one item per case module and per check, with each result marked in the
-  gutter of the check's own line. Running one check, a module or the whole suite runs
-  only that much of the program.
+- **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
+  and per check, each result marked in the gutter of the check's own line. See below.
 
-## Tests in the Testing panel
+## Using the Testing panel
 
-There is no separate test format to write. A suite is an ordinary MiniScript program
-whose harness prints a record per check, and this extension reads those records:
+Your suite runs inside VS Code's own Test Explorer — the same panel every other language
+uses — so there is no separate test window and nothing new to learn beyond where things
+are.
+
+**Open it.** Click the **Testing** icon (the beaker) in the Activity Bar, or run
+**Testing: Focus on Test Explorer View** from the Command Palette (`Ctrl+Shift+P`). A
+controller named **MiniScript 2** appears.
+
+**Read the tree.** It is three levels deep:
+
+- the workspace folder,
+- each case module the suite runs (`display.ms`, `proofs.ms`, …),
+- each check inside it, under the name the suite gave it.
+
+The list is built the first time you open the panel, by running the suite once with
+`--json` to collect its checks. If you add, rename or remove checks, run
+**Developer: Reload Window** to rediscover them.
+
+**Run.** Hover any item and click its ▶, or select items and use the run button at the top
+of the panel:
+
+- the folder runs the whole suite,
+- a module runs just that case file (the extension passes `--file`),
+- a single check runs only the checks whose name contains it (`--filter`).
+
+Running one check or one module runs only that much of the program, not the whole suite.
+The **Run Failed Tests** and re-run buttons the Test Explorer provides work as usual, and
+the stop button cancels a run and kills the interpreter.
+
+**See results.** Pass and fail show as icons in the tree and in the **gutter** beside each
+check's own line — open the case file to see them there. Click a check to jump to its
+line. A failure carries a `FAIL <name>` message pinned to that line; select the check to
+read it. Because a check's line comes from the suite itself, editing a case file and
+shifting its checks is fine: the next run matches each check by name and moves the gutter
+to the line the check now reports.
+
+**When a run is cut short.** The interpreter exits `0` even when an uncaught runtime error
+stops the program, so a check that never reported its result is shown as an **error**, not
+a pass — *"The suite stopped before this check was recorded."* If the interpreter cannot
+be found, every check in that folder errors with the reason instead.
+
+**Output.** Anything the suite prints that is not a check — plus everything on stderr —
+goes to the **Test Results** output, so a stray `print` or a stack trace is still there to
+read.
+
+**Choose the suite.** `miniscript2.testSuite` (default `test/run.ms`) names the suite,
+relative to each workspace folder. The interpreter comes from the same three places
+**Run MiniScript File** uses (below).
+
+## Writing a suite the panel can read
+
+There is no separate test format to write. A suite is an ordinary MiniScript program whose
+harness prints one record per check, and which honours three arguments:
+
+- `--json` — print a `##TEST` record per check and a closing `##END` record;
+- `--filter <text>` — run only the checks whose name contains `<text>`;
+- `--file <module>` — run only that case module.
+
+A check record carries its name, its result and the file and line it sits on:
 
 ```
 ##TEST {"name":"display","status":"pass","file":"display.ms","line":14}
 ```
 
-so a check's name, its result and the line it sits on all come from the suite itself, and
-`test/harness.ms` here is one harness that prints them. The panel runs the suite with
-`--json` to list the checks, then runs it again with `--filter` (a substring of a check's
-name) and `--file` (a case module) to run the ones you asked for. A suite that does not
-take those arguments will list nothing.
+so a check's name, result and location all come from the suite itself, and
+`test/harness.ms` is one harness that prints them. The run then closes with
 
-The run also has to say when it finished: the harness closes with
-`##END {"passed":174,"failed":0,"skipped":0}`, because the interpreter exits `0` even
-when an uncaught runtime error stops the program. Without that closing line the extension
-reports the checks that never reported as errors rather than as passes.
+```
+##END {"passed":174,"failed":0,"skipped":0}
+```
 
-The suite is found at `miniscript2.testSuite` (default `test/run.ms`), relative to each
-workspace folder, and the interpreter comes from the same three places **Run MiniScript
-File** uses.
+which is how the extension tells a finished run from one an error stopped early — without
+that closing line it reports the checks that never reported as errors rather than as
+passes. A suite that does not take `--json`, `--filter` and `--file` will list nothing.
 
 ## Where the interpreter comes from
 
