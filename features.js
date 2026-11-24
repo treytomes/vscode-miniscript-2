@@ -13,9 +13,12 @@ const { KEYWORDS, SCOPES, inLiteral, innermost, locate, scan, typeOf } = require
 
 const WORD = /[A-Za-z_][A-Za-z0-9_]*/;
 const IMPORT = /^[ \t]*import[ \t]+"([^"]+)"/;
+// A notebook cell is a MiniScript document too, under the scheme VS Code gives one, so
+// everything these providers answer is answered in a cell as well as in a file.
 const SELECTOR = [
 	{ language: "miniscript", scheme: "file" },
 	{ language: "miniscript", scheme: "untitled" },
+	{ language: "miniscript", scheme: "vscode-notebook-cell" },
 ];
 
 const KINDS = {

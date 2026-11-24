@@ -99,6 +99,11 @@ file relative to the project folder instead (`"data/facts.kb"`).
 A cell cannot read the keyboard: `input` would swallow the notebook's own lines, so a
 program that asks questions belongs in **Run MiniScript File** and its terminal.
 
+A cell is a MiniScript document to the editor, so everything the rest of this README
+describes works inside one: the tooltip, Ctrl-click, the Outline, completion after a dot,
+the parameter popup and the squiggles. A relative `import` in a cell is left unjudged,
+since a cell has no file of its own to measure the path from.
+
 ## Tooltips, Ctrl-click and the Outline
 
 These read the file's names without running anything.

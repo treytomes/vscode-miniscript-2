@@ -15,6 +15,9 @@ function disposable() {
 
 const opened = {
 	collection: undefined,
+	hover: undefined,
+	definition: undefined,
+	outline: undefined,
 	completion: undefined,
 	signature: undefined,
 	triggers: {},
@@ -44,12 +47,14 @@ const vscode = {
 	SymbolKind: { Function: 11, Method: 5, Class: 4, Variable: 12 },
 	MarkdownString: class {
 		constructor(value) {
-			this.value = value;
+			this.value = value || "";
 		}
-		appendCodeblock() {
+		appendCodeblock(code) {
+			this.value += `${code}\n`;
 			return this;
 		}
-		appendMarkdown() {
+		appendMarkdown(text) {
+			this.value += text;
 			return this;
 		}
 	},
@@ -110,9 +115,18 @@ const vscode = {
 			};
 			return opened.collection;
 		},
-		registerHoverProvider: () => disposable(),
-		registerDefinitionProvider: () => disposable(),
-		registerDocumentSymbolProvider: () => disposable(),
+		registerHoverProvider: (selector, provider) => {
+			opened.hover = provider;
+			return disposable();
+		},
+		registerDefinitionProvider: (selector, provider) => {
+			opened.definition = provider;
+			return disposable();
+		},
+		registerDocumentSymbolProvider: (selector, provider) => {
+			opened.outline = provider;
+			return disposable();
+		},
 		registerCompletionItemProvider: (selector, provider, ...triggers) => {
 			opened.completion = provider;
 			opened.triggers.completion = triggers;
@@ -159,29 +173,53 @@ function activate() {
 	return opened.collection;
 }
 
-function document(text, name = "demo") {
+function document(text, name = "demo", scheme = "file") {
 	let value = text;
+	const extension = scheme === "file" ? "ms" : "msnb";
+	const line = (number) => value.split(/\r?\n/)[number] || "";
 	return {
 		languageId: "miniscript",
 		version: 1,
-		uri: {
-			scheme: "file",
-			fsPath: `/work/${name}.ms`,
-			toString: () => `file:///work/${name}.ms`,
+		get lineCount() {
+			return value.split(/\r?\n/).length;
 		},
-		getText: () => value,
-		lineAt: (line) => ({ text: value.split(/\r?\n/)[line] || "" }),
+		uri: {
+			scheme,
+			fsPath: `/work/${name}.${extension}`,
+			toString: () => `${scheme}:/work/${name}.${extension}`,
+		},
+		getText: (range) =>
+			range ? line(range.start.line).slice(range.start.character, range.end.character) : value,
+		lineAt: (number) => ({ text: line(number) }),
 		offsetAt: (position) => {
-			const lines = value.split(/\r?\n/);
 			let offset = 0;
-			for (let line = 0; line < position.line; line += 1) offset += lines[line].length + 1;
+			for (let number = 0; number < position.line; number += 1) offset += line(number).length + 1;
 			return offset + position.character;
+		},
+		getWordRangeAtPosition: (position, pattern) => {
+			for (const match of line(position.line).matchAll(new RegExp(pattern.source, "g"))) {
+				const start = match.index;
+				const end = start + match[0].length;
+				if (position.character >= start && position.character <= end) {
+					return {
+						start: { line: position.line, character: start },
+						end: { line: position.line, character: end },
+					};
+				}
+			}
+			return undefined;
 		},
 		set(next) {
 			value = next;
 			this.version += 1;
 		},
 	};
+}
+
+// A notebook cell is a document under the scheme VS Code gives one, with the language the
+// notebook's own cells are made with.
+function cell(text) {
+	return document(text, "cell", "vscode-notebook-cell");
 }
 
 function published(collection, doc) {
@@ -472,4 +510,97 @@ test("a parenthesis inside a string does not close the call", async () => {
 	const help = await helpAt(doc, 4, 1);
 	assert.equal(help.signatures[0].label, "add(a, b=2)");
 	assert.equal(help.activeParameter, 1);
+});
+
+// A notebook cell is a document under a scheme of its own, so each provider is asked for
+// one, the same way it is asked for a file.
+test("hover works inside a notebook cell", async () => {
+	activate();
+	const doc = cell(
+		[
+			"// Adds two numbers.",
+			"add = function(a, b=2)",
+			"\treturn a + b",
+			"end function",
+			"print add(1)",
+		].join("\n")
+	);
+
+	const hover = await opened.hover.provideHover(doc, { line: 4, character: 7 });
+	assert.match(hover.contents.value, /add\(a, b=2\)/);
+	assert.match(hover.contents.value, /Adds two numbers\./);
+	assert.deepEqual(hover.range.start, { line: 4, character: 6 });
+});
+
+test("Ctrl-click works inside a notebook cell", async () => {
+	activate();
+	const doc = cell(
+		["add = function(a)", "\treturn a", "end function", "print add(1)"].join("\n")
+	);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 3, character: 7 });
+	assert.equal(locations.length, 1);
+	assert.equal(locations[0].uri, doc.uri);
+	assert.deepEqual(locations[0].range.start, { line: 0, character: 0 });
+});
+
+test("the Outline lists a notebook cell's symbols", async () => {
+	activate();
+	const doc = cell(
+		[
+			'Shape = {"sides": 0}',
+			"Shape.degrees = function",
+			"\treturn 1",
+			"end function",
+			"count = 0",
+		].join("\n")
+	);
+
+	const symbols = opened.outline.provideDocumentSymbols(doc);
+	assert.deepEqual(
+		symbols.map((symbol) => symbol.name),
+		["Shape", "count"]
+	);
+	assert.equal(symbols[0].kind, vscode.SymbolKind.Class);
+	assert.deepEqual(
+		symbols[0].children.map((child) => child.name),
+		["degrees"]
+	);
+});
+
+test("diagnostics are published for a notebook cell", async () => {
+	const collection = activate();
+	const doc = cell('s = "hi"\nprint s.lengh');
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const [found] = published(collection, doc);
+	assert.equal(found.code, "unknown-member");
+	assert.equal(found.severity, vscode.DiagnosticSeverity.Warning);
+	assert.deepEqual(found.range.start, { line: 1, character: 8 });
+});
+
+test("completion works inside a notebook cell", async () => {
+	activate();
+	const doc = cell(['s = "hi"', "print s."].join("\n"));
+	const members = labels(await completionAt(doc, 1, 8));
+	assert.ok(members.includes("upper"));
+});
+
+test("signature help works inside a notebook cell", async () => {
+	activate();
+	const doc = cell(
+		["add = function(a, b=2)", "\treturn a + b", "end function", "add(1,"].join("\n")
+	);
+	const help = await helpAt(doc, 3, 6);
+	assert.equal(help.signatures[0].label, "add(a, b=2)");
+	assert.equal(help.activeParameter, 1);
+});
+
+test("a markdown cell is left alone", async () => {
+	const collection = activate();
+	const doc = cell("s.lengh");
+	doc.languageId = "markdown";
+	await opened.events.onDidOpenTextDocument(doc);
+
+	assert.equal(collection.entries.has(doc.uri.toString()), false);
 });
