@@ -40,6 +40,29 @@ test("a map's key is not a member the scan can know", () => {
 	assert.deepEqual(lint('m = {"a": 1}\nprint m.anything'), []);
 });
 
+test("a call through an instance is not a member the type check calls wrong", () => {
+	// `new` gives the name a map's type, and a map's keys are its members, so the class's
+	// methods - and any key the program adds to an instance - are never reported.
+	const text = [
+		'Shape = {"sides": 4}',
+		"Shape.degrees = function(times=1)",
+		"\treturn times * 45",
+		"end function",
+		"Shape.show = function",
+		"\tprint self.degrees(2)",
+		"end function",
+		"sq = new Shape",
+		"print sq.degrees(2)",
+		"print Shape.degrees()",
+	].join("\n");
+	assert.deepEqual(lint(text), []);
+});
+
+test("an instance of a class this file cannot see is not judged either", () => {
+	const text = ['import "shapes"', "sq = new Shape", "print sq.degrees(2)"].join("\n");
+	assert.deepEqual(lint(text), []);
+});
+
 test("a receiver with no one type is not judged", () => {
 	assert.deepEqual(lint('x = 1\nx = "one"\nprint x.lengh'), []);
 	assert.deepEqual(lint("f = function(value)\n\treturn value.lengh\nend function"), []);

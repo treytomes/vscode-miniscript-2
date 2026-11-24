@@ -200,8 +200,10 @@ Three problems are marked as you type, without starting the interpreter:
 - **A member the type does not have.** `s = "hi"` makes `s.lengh` a warning, and hovering
   it says what was probably meant: *`string` has no member `lengh`. Did you mean `len`?*
   Only a receiver whose type the file can prove — a string or a list — is judged, and
-  `m.anything` is never reported, since every key of a map is a member. A file that adds a
-  member to a type (`string.shout = function`) turns the check off for that type. The
+  `m.anything` is never reported, since every key of a map is a member. An instance `new`
+  made is a map too, so `sq.degrees` after `sq = new Shape` is never called wrong, however
+  the class was made. A file that adds a member to a type (`string.shout = function`) turns
+  the check off for that type. The
   interpreter only finds the mistake when the line runs (`Key Not Found`), which is why it
   is a warning rather than an error.
 - **A block that never closes.** `if`, `for`, `while` and `function` are each closed by
