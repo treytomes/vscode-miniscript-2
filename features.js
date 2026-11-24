@@ -10,7 +10,16 @@ const path = require("path");
 const vscode = require("vscode");
 const builtins = require("./builtins");
 const { lint, importTargets } = require("./lint");
-const { KEYWORDS, SCOPES, inLiteral, innermost, locate, scan, typeOf } = require("./symbols");
+const {
+	KEYWORDS,
+	SCOPES,
+	inLiteral,
+	innermost,
+	locate,
+	scan,
+	tokenize,
+	typeOf,
+} = require("./symbols");
 
 const WORD = /[A-Za-z_][A-Za-z0-9_]*/;
 const IMPORT = /^[ \t]*import[ \t]+"([^"]+)"/;
@@ -40,6 +49,17 @@ const COMPLETION_KINDS = {
 
 // The kinds of symbol whose body spans lines, so a position can be read as inside one.
 const FUNCTION_KINDS = new Set(["function", "method"]);
+
+// What the editor colors, and what each one means: the kinds of name the file itself
+// defines, plus the language's own names, which no file defines. The theme chooses the
+// colors; the legend says which type each name is, and `defaultLibrary` marks an intrinsic
+// for a theme that wants it told apart from the project's own functions.
+const TOKEN_TYPES = ["class", "function", "method", "parameter", "variable", "intrinsic"];
+const TOKEN_MODIFIERS = ["declaration", "defaultLibrary"];
+const TOKEN_TYPE = new Map(TOKEN_TYPES.map((type, index) => [type, index]));
+const TOKEN_LEGEND = new vscode.SemanticTokensLegend(TOKEN_TYPES, TOKEN_MODIFIERS);
+const DECLARED = 1 << TOKEN_MODIFIERS.indexOf("declaration");
+const DEFAULT_LIBRARY = 1 << TOKEN_MODIFIERS.indexOf("defaultLibrary");
 
 // `globals.x` is this file's own x, and self/super/locals/outer name a map whose contents
 // the scan cannot know; none of them is a receiver to look a method up on.
@@ -614,6 +634,73 @@ async function signatureHelp(document, position, index) {
 	return matches.length ? signatureOf(matches[0].symbol, call.active) : undefined;
 }
 
+// The member after a dot, read the way hover reads it: a method this file gives that
+// receiver, or an intrinsic of the receiver's proven type. `self` and `super` reach the
+// class the enclosing method belongs to.
+function memberKind(symbols, tokens, index, line) {
+	const token = tokens[index];
+	const receiver = tokens[index - 2];
+	if (!receiver || receiver.type !== "word") return undefined;
+	const found = locate(symbols, { name: token.value, line });
+	if (receiver.value === "self" || receiver.value === "super") {
+		const owners = symbols.filter(
+			(symbol) =>
+				FUNCTION_KINDS.has(symbol.kind) &&
+				symbol.receiver &&
+				symbol.line <= line &&
+				(symbol.endLine === undefined || symbol.endLine >= line)
+		);
+		const owner = owners[owners.length - 1];
+		return owner && found && found.receiver === owner.receiver ? "method" : undefined;
+	}
+	if (found && found.kind === "method" && found.receiver === receiver.value) return "method";
+	const type = typeOf(symbols, { name: receiver.value, line });
+	return type && builtins.member(token.value, type).length ? "intrinsic" : undefined;
+}
+
+// Every name in the document, colored by what it is: what the file defines, and what the
+// language does. A name the scan cannot place - an imported module's, a key of a map -
+// keeps the grammar's color rather than pretending to be something it is not.
+function semanticTokens(document, index) {
+	const text = document.getText();
+	const symbols = index.forDocument(document);
+	const builder = new vscode.SemanticTokensBuilder(TOKEN_LEGEND);
+	const declarations = new Map();
+	for (const symbol of symbols) {
+		declarations.set(`${symbol.line}:${symbol.character}`, symbol);
+	}
+
+	const lines = text.split(/\r?\n/);
+	for (let line = 0; line < lines.length; line += 1) {
+		const tokens = tokenize(lines[line], line);
+		for (let i = 0; i < tokens.length; i += 1) {
+			const token = tokens[i];
+			if (token.type !== "word" || KEYWORDS.has(token.value)) continue;
+
+			const declaration = declarations.get(`${line}:${token.start}`);
+			let kind;
+			if (declaration) kind = declaration.kind;
+			else if (tokens[i - 1] && tokens[i - 1].value === ".") {
+				kind = memberKind(symbols, tokens, i, line);
+			} else {
+				const symbol = locate(symbols, { name: token.value, line });
+				kind = symbol ? symbol.kind : builtins.global(token.value) ? "intrinsic" : undefined;
+			}
+
+			const type = TOKEN_TYPE.get(kind);
+			if (type === undefined) continue;
+			builder.push(
+				line,
+				token.start,
+				token.end - token.start,
+				type,
+				declaration ? DECLARED : kind === "intrinsic" ? DEFAULT_LIBRARY : 0
+			);
+		}
+	}
+	return builder.build();
+}
+
 // How long typing settles before a file is checked again.
 const DEBOUNCE = 250;
 
@@ -716,6 +803,11 @@ function register(context) {
 			SELECTOR,
 			{ provideCodeActions: (document, range, context) => codeActions(document, context) },
 			{ providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
+		),
+		vscode.languages.registerDocumentSemanticTokensProvider(
+			SELECTOR,
+			{ provideDocumentSemanticTokens: (document) => semanticTokens(document, index) },
+			TOKEN_LEGEND
 		),
 		vscode.workspace.onDidChangeTextDocument((event) => index.forget(event.document.uri)),
 		vscode.workspace.onDidSaveTextDocument(() => index.forgetWorkspace()),

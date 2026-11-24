@@ -19,6 +19,8 @@ const opened = {
 		definition: undefined,
 		outline: undefined,
 		actions: undefined,
+		tokens: undefined,
+		legend: undefined,
 		completion: undefined,
 	signature: undefined,
 	triggers: {},
@@ -53,6 +55,23 @@ const vscode = {
 		}
 		replace(uri, range, text) {
 			this.edits.push({ uri, range, text });
+		}
+	},
+	SemanticTokensLegend: class {
+		constructor(tokenTypes, tokenModifiers) {
+			Object.assign(this, { tokenTypes, tokenModifiers });
+		}
+	},
+	SemanticTokensBuilder: class {
+		constructor(legend) {
+			this.legend = legend;
+			this.pushed = [];
+		}
+		push(line, character, length, tokenType, tokenModifiers) {
+			this.pushed.push({ line, character, length, tokenType, tokenModifiers });
+		}
+		build() {
+			return { legend: this.legend, pushed: this.pushed };
 		}
 	},
 	Range: class {
@@ -156,6 +175,11 @@ const vscode = {
 		},
 		registerCodeActionsProvider: (selector, provider) => {
 			opened.actions = provider;
+			return disposable();
+		},
+		registerDocumentSemanticTokensProvider: (selector, provider, legend) => {
+			opened.tokens = provider;
+			opened.legend = legend;
 			return disposable();
 		},
 	},
@@ -356,6 +380,15 @@ function applyFix(doc, action) {
 
 function actionsFor(doc, found) {
 	return opened.actions.provideCodeActions(doc, found.range, { diagnostics: [found] });
+}
+
+function tokenAt(tokens, line, character) {
+	return tokens.pushed.find((token) => token.line === line && token.character === character);
+}
+
+function kindOf(tokens, line, character) {
+	const token = tokenAt(tokens, line, character);
+	return token ? opened.legend.tokenTypes[token.tokenType] : undefined;
 }
 
 test("completion offers the names in scope, the enclosing function's own first", async () => {
@@ -724,6 +757,84 @@ test("a mismatched end offers the end that should come before it", async () => {
 		lint(fixed).map((problem) => problem.code),
 		["stray-end"],
 		"the wrong end is now the one to correct"
+	);
+});
+
+// Semantic tokens say what each name is, so the theme can color it for what it is rather
+// than for its shape. The tests read the pushed tokens through the legend's own names.
+test("semantic tokens tell intrinsics, functions, parameters and classes apart", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 0}',
+			"Shape.degrees = function",
+			"\treturn self.sides",
+			"end function",
+			"add = function(a, b=2)",
+			"\treturn a + b",
+			"end function",
+			"print add(1)",
+			's = "hi"',
+			"print s.upper",
+		].join("\n")
+	);
+
+	const tokens = await opened.tokens.provideDocumentSemanticTokens(doc);
+	assert.equal(kindOf(tokens, 0, 0), "class");
+	assert.equal(tokenAt(tokens, 0, 0).tokenModifiers, 1, "a declaration");
+	assert.equal(kindOf(tokens, 1, 0), "class");
+	assert.equal(kindOf(tokens, 1, 6), "method");
+	assert.equal(tokenAt(tokens, 1, 6).tokenModifiers, 1);
+	assert.equal(kindOf(tokens, 4, 0), "function");
+	assert.equal(kindOf(tokens, 4, 15), "parameter");
+	assert.equal(kindOf(tokens, 4, 18), "parameter");
+	assert.equal(kindOf(tokens, 5, 8), "parameter");
+	assert.equal(kindOf(tokens, 5, 12), "parameter");
+	assert.equal(kindOf(tokens, 7, 0), "intrinsic");
+	assert.equal(tokenAt(tokens, 7, 0).tokenModifiers, 2, "the language's own library");
+	assert.equal(kindOf(tokens, 7, 6), "function");
+	assert.equal(tokenAt(tokens, 7, 6).tokenModifiers, 0);
+	assert.equal(kindOf(tokens, 8, 0), "variable");
+	assert.equal(kindOf(tokens, 9, 6), "variable");
+	assert.equal(kindOf(tokens, 9, 8), "intrinsic");
+	assert.equal(kindOf(tokens, 2, 8), undefined, "self is not a name the scan knows");
+	assert.equal(kindOf(tokens, 2, 13), undefined, "a map's key is not a symbol");
+	assert.equal(tokens.pushed.length, 14);
+});
+
+test("the legend says what the token types and modifiers mean", () => {
+	activate();
+	assert.deepEqual(opened.legend.tokenTypes, [
+		"class",
+		"function",
+		"method",
+		"parameter",
+		"variable",
+		"intrinsic",
+	]);
+	assert.deepEqual(opened.legend.tokenModifiers, ["declaration", "defaultLibrary"]);
+});
+
+test("a notebook cell is colored the same way", async () => {
+	activate();
+	const doc = cell(["add = function(a)", "\treturn a", "end function", "print add(1)"].join("\n"));
+	const tokens = await opened.tokens.provideDocumentSemanticTokens(doc);
+	assert.equal(kindOf(tokens, 0, 0), "function");
+	assert.equal(kindOf(tokens, 1, 8), "parameter");
+	assert.equal(kindOf(tokens, 3, 0), "intrinsic");
+	assert.equal(kindOf(tokens, 3, 6), "function");
+});
+
+test("a name in a string or a comment keeps the grammar's color", async () => {
+	activate();
+	const doc = document(['// print add', 's = "hi"', 'print "print add"'].join("\n"));
+	const tokens = await opened.tokens.provideDocumentSemanticTokens(doc);
+	assert.deepEqual(
+		tokens.pushed.map((token) => [token.line, token.character]),
+		[
+			[1, 0],
+			[2, 0],
+		]
 	);
 });
 

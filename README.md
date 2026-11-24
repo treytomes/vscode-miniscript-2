@@ -24,6 +24,10 @@ suite in the Testing panel.
   imported module's names after its alias, and a receiver's own and the language's
   members; typing a call shows its parameters with the one you are writing in bold. See
   below.
+- **Colors that mean something** — project functions, methods, classes, parameters and
+  variables are colored from what the symbol index says they are, and the language's own
+  names (`print`, `s.upper`) from its intrinsic table, so a name the file does not define
+  never looks like one it does. See below.
 - **Notebooks** — a `.msnb` file is a column of cells, each run with Shift+Enter against
   one MiniScript session, its output underneath, pictures a cell draws included. See below.
 - **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
@@ -203,6 +207,29 @@ one the cursor is in in bold: a project function's own list, or an intrinsic's f
 language's tables (`s.split(delimiter=" ", maxCount=null)`). A call may wrap its arguments
 over several lines — the popup reads back to the parenthesis that opened it — and the
 count follows that call's own commas, so a call inside an argument does not move it.
+
+## Colors that mean something
+
+The grammar colors by shape — any `name(` is a function — so on its own it cannot tell
+`print` from `add` from a name that does not exist. Semantic tokens answer that from the
+same scan the tooltips use: a name the file defines is colored as what it is (function,
+method, class, parameter, variable), a name the language provides (`print`, `range`,
+`s.upper`) as an intrinsic, and a name the scan cannot place — an imported module's, a key
+of a map — keeps the grammar's color instead of pretending to be something it is not.
+
+The theme chooses the colors; the extension only says which kind each name is. Intrinsics
+carry the standard `defaultLibrary` modifier and are mapped to `support.function.builtin`
+for themes that have no rule for the type, so a theme which does not distinguish them
+colors them like functions. One line in settings takes care of that:
+
+```json
+"editor.semanticTokenColorCustomizations": {
+  "rules": { "intrinsic:miniscript": { "foreground": "#4EC9B0", "fontStyle": "italic" } }
+}
+```
+
+Semantic highlighting is turned on for MiniScript files by default; setting
+`editor.semanticHighlighting.enabled` to `false` turns it off again.
 
 ## Using the Testing panel
 
