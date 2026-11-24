@@ -81,6 +81,30 @@ function enclosingMethod(symbols, line) {
 	return owners[owners.length - 1];
 }
 
+// The method a receiver's member names, read the way hover, completion and the scans all
+// read it: the receiver's own method when the file gave one, `self`/`super` reaching the
+// enclosing method's class, and `sq = new Shape` reaching the class that made `sq`.
+function methodAt(symbols, receiver, name, line) {
+	if (!receiver) return undefined;
+	if (receiver === "self" || receiver === "super") {
+		const owner = enclosingMethod(symbols, line);
+		return owner && owner.receiver
+			? locate(symbols, { name, receiver: owner.receiver, line })
+			: undefined;
+	}
+	const own = locate(symbols, { name, receiver, line });
+	if (own) return own;
+	const made = classOf(symbols, { name: receiver, line });
+	return made ? locate(symbols, { name, receiver: made, line }) : undefined;
+}
+
+// The receiver written in front of the word under the cursor, when the word is a member.
+function receiverOf(document, position, range) {
+	const before = document.lineAt(position.line).text.slice(0, range.start.character);
+	const match = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*$/.exec(before);
+	return match ? match[1] : undefined;
+}
+
 function receiverBefore(before) {
 	const match = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*$/.exec(before);
 	return match ? match[1] : undefined;
@@ -278,11 +302,7 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 	// method is the answer - the same one completion gives, and the only one that can be
 	// right when a top-level name is spelled the same as the method.
 	if (receiver === "self" || receiver === "super") {
-		const owner = enclosingMethod(here, line);
-		const own =
-			owner && owner.receiver
-				? locate(here, { name, receiver: owner.receiver, line })
-				: undefined;
+		const own = methodAt(here, receiver, name, line);
 		if (own) return [{ uri: document.uri, symbol: own }];
 	}
 
@@ -304,11 +324,8 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 		}
 
 		// `sq = new Shape` makes `sq.method` the method this file gave that class.
-		const made = classOf(here, { name: known, line });
-		if (made) {
-			const inherited = locate(here, { name, receiver: made, line });
-			if (inherited) return [{ uri: document.uri, symbol: inherited }];
-		}
+		const inherited = methodAt(here, known, name, line);
+		if (inherited) return [{ uri: document.uri, symbol: inherited }];
 	}
 
 	// globals, locals, outer, self and super are all maps: a name on one that this file
@@ -458,26 +475,25 @@ function rangesOf(document, symbols, target, includeDeclaration) {
 			if (token.type !== "word" || token.value !== target.name) continue;
 			const declaration = line === target.line && token.start === target.character;
 			if (declaration && !includeDeclaration) continue;
-			if (i > 0 && tokens[i - 1].value === "." && !memberOf(symbols, tokens, i, line, target)) {
-				continue;
-			}
-			if (locate(symbols, { name: target.name, line }) !== target) continue;
+			if (i > 0 && tokens[i - 1].value === ".") {
+				// A member belongs to whatever the receiver resolves to: `sq.degrees` is
+				// `Shape.degrees`, and a local spelled the same does not take it away.
+				if (!memberOf(symbols, tokens, i, line, target)) continue;
+			} else if (locate(symbols, { name: target.name, line }) !== target) continue;
 			ranges.push(new vscode.Range(line, token.start, line, token.end));
 		}
 	}
 	return ranges;
 }
 
-// Whether `receiver.name` is this method: the receiver it was defined on, or `self` and
-// `super` inside that class.
+// Whether `receiver.name` is this method: the receiver it was defined on, `self` and
+// `super` inside that class, or an instance `new` made from it.
 function memberOf(symbols, tokens, index, line, target) {
 	if (target.kind !== "method" || !target.receiver) return false;
 	const receiver = tokens[index - 2];
 	if (!receiver) return false;
 	if (receiver.value === target.receiver) return true;
-	if (receiver.value !== "self" && receiver.value !== "super") return false;
-	const owner = enclosingMethod(symbols, line);
-	return Boolean(owner) && owner.receiver === target.receiver;
+	return methodAt(symbols, receiver.value, target.name, line) === target;
 }
 
 // Every place the name under the cursor is written in this file. A name the file does not
@@ -490,7 +506,11 @@ function references(document, position, index, includeDeclaration) {
 	const name = document.getText(range);
 	if (KEYWORDS.has(name)) return [];
 	const symbols = index.forDocument(document);
-	const target = locate(symbols, { name, line: position.line });
+	const receiver = receiverOf(document, position, range);
+	const target =
+		receiver === undefined
+			? locate(symbols, { name, line: position.line })
+			: methodAt(symbols, receiver, name, position.line);
 	if (!target) return [];
 	return rangesOf(document, symbols, target, includeDeclaration).map(
 		(found) => new vscode.Location(document.uri, found)
@@ -507,7 +527,11 @@ function localAt(document, position, index) {
 	if (!range) return undefined;
 	const name = document.getText(range);
 	const symbols = index.forDocument(document);
-	const target = locate(symbols, { name, line: position.line });
+	const receiver = receiverOf(document, position, range);
+	const target =
+		receiver === undefined
+			? locate(symbols, { name, line: position.line })
+			: methodAt(symbols, receiver, name, position.line);
 	if (!target || !target.container) return undefined;
 	return { name, range, symbols, target };
 }

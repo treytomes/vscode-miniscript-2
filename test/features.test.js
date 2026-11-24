@@ -863,6 +863,126 @@ test("a notebook cell is colored the same way", async () => {
 	assert.equal(kindOf(tokens, 3, 6), "function");
 });
 
+// The scans read `sq.degrees` as `Shape.degrees` too, so finding or renaming one finds the
+// other, and a local spelled the same does not take the method's uses away.
+test("references follow an instance to its class's method", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"sq = new Shape",
+			"print sq.degrees(2)",
+			"print Shape.degrees()",
+		].join("\n")
+	);
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 6 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		found.map((location) => location.range.start.line),
+		[1, 5, 6],
+		"the declaration, the instance's call and the class's call"
+	);
+});
+
+test("a local named like a method does not take the method's instance call", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"work = function",
+			"\tdegrees = 0",
+			"\tsq = new Shape",
+			"\treturn sq.degrees(degrees)",
+			"end function",
+		].join("\n")
+	);
+
+	const uses = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 6 },
+		{ includeDeclaration: false }
+	);
+	assert.deepEqual(uses.map((location) => location.range.start.line), [7]);
+
+	const onMember = await opened.references.provideReferences(
+		doc,
+		{ line: 7, character: 13 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		onMember.map((location) => location.range.start.line),
+		[1, 7],
+		"the cursor on the member finds the method, not the local"
+	);
+});
+
+test("rename follows the instance, and the method's name is not a local", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"turn = function",
+			"\tsq = new Shape",
+			"\treturn sq.degrees(2)",
+			"end function",
+		].join("\n")
+	);
+
+	const edit = await opened.rename.provideRenameEdits(doc, { line: 5, character: 1 }, "shape");
+	assert.deepEqual(
+		edit.edits.map((entry) => [entry.range.start.line, entry.range.start.character, entry.text]),
+		[
+			[5, 1, "shape"],
+			[6, 8, "shape"],
+		]
+	);
+	assert.equal(
+		opened.rename.prepareRename(doc, { line: 6, character: 12 }),
+		undefined,
+		"the member belongs to the class's method, which this file does not rename"
+	);
+});
+
+test("a member access is not renamed as the local it is spelled like", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"turn = function",
+			"\tdegrees = 0",
+			"\tsq = new Shape",
+			"\treturn sq.degrees(degrees)",
+			"end function",
+		].join("\n")
+	);
+
+	assert.equal(
+		opened.rename.prepareRename(doc, { line: 7, character: 13 }),
+		undefined,
+		"the cursor is on the class's method, not on the local"
+	);
+	assert.equal(await opened.rename.provideRenameEdits(doc, { line: 7, character: 13 }, "turns"), undefined);
+
+	const local = opened.rename.prepareRename(doc, { line: 5, character: 1 });
+	assert.equal(local.placeholder, "degrees", "the local itself still renames");
+});
+
 // An instance made with `new` carries its class, so `sq.` and `sq.method` reach the same
 // members `Shape.` and `Shape.method` do, with the map's own members still there.
 test("completion on an instance offers its class's methods", async () => {

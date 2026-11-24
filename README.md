@@ -182,9 +182,12 @@ workspace's other `.ms` files, and Ctrl-click lists every file that defines it.
 
 **Find All References** (`Shift+F12`) lists every place in the file the name under the
 cursor is written — the declaration too, when the editor asks for it — and **Rename**
-(`F2`) rewrites them. Rename is offered for a local or a parameter and for nothing else: a
-name at the file's top level can be used from files this one has not read, and rewriting
-only the uses it can see would be a quiet mistake.
+(`F2`) rewrites them. A call through an instance counts: after `sq = new Shape`,
+`sq.degrees` is one of `Shape.degrees`'s uses, the same reading hover and Ctrl-click give,
+and a local spelled `degrees` does not take it away. Rename is offered for a local or a
+parameter and for nothing else: a name at the file's top level can be used from files this
+one has not read, and rewriting only the uses it can see would be a quiet mistake — while a
+member access is never renamed as the local it happens to be spelled like.
 
 **Go to Symbol in Workspace** (`Ctrl+T`) searches every `.ms` file for the functions,
 methods, classes and top-level variables the name contains; locals and parameters are
