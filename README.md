@@ -248,8 +248,10 @@ controller named **MiniScript 2** appears.
 - each check inside it, under the name the suite gave it.
 
 The list is built the first time you open the panel, by running the suite once with
-`--json` to collect its checks. If you add, rename or remove checks, run
-**Developer: Reload Window** to rediscover them.
+`--json` to collect its checks. It keeps itself current: saving a `.ms` file in the folder
+makes the panel ask the suite again, so a check you add, rename or remove appears or goes
+by itself. A check that is still there keeps its item and the last run's mark; one that
+moved keeps its item and its gutter line follows.
 
 **Run.** Hover any item and click its ▶, or select items and use the run button at the top
 of the panel:
@@ -276,7 +278,8 @@ be found, every check in that folder errors with the reason instead.
 
 **Output.** Anything the suite prints that is not a check — plus everything on stderr —
 goes to the **Test Results** output, so a stray `print` or a stack trace is still there to
-read.
+read. Each run also ends with the suite's own totals there, `2 passed, 0 failed, 0 skipped`,
+since a check the harness skipped has no item of its own for the panel to count.
 
 **Choose the suite.** `miniscript2.testSuite` (default `test/run.ms`) names the suite,
 relative to each workspace folder. The interpreter comes from the same three places

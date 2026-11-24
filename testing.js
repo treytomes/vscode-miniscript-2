@@ -12,6 +12,8 @@ const path = require("path");
 const vscode = require("vscode");
 
 const DEFAULT_SUITE = "test/run.ms";
+// How long after the last save the panel asks the suite for its checks again.
+const REFRESH = 300;
 
 function parseRecord(text) {
 	try {
@@ -144,7 +146,25 @@ function register(context, { resolveInterpreter }) {
 			paths: new Map(),
 		};
 		groups.set(folder.uri.fsPath, group);
+		await fill(group);
+	}
 
+	// One discovery at a time per folder: a save during a discovery queues the next one
+	// instead of starting a second run of the suite alongside it.
+	function fill(group) {
+		group.filling = (group.filling || Promise.resolve())
+			.then(() => fillNow(group))
+			.catch(() => {});
+		return group.filling;
+	}
+
+	// The checks the suite reports, as the group's tree. A check still in the suite keeps
+	// its item - and the last run's mark with it - so a save that changes nothing about the
+	// checks does not empty the panel; one that moved keeps its item and its line moves; one
+	// that is gone leaves. Nothing is replaced unless the suite answered, so a discovery
+	// that fails leaves the last good tree in place.
+	async function fillNow(group) {
+		const { folder, suite } = group;
 		const interpreter = resolveInterpreter(folder.uri.fsPath);
 		if (interpreter.problem) return;
 
@@ -160,44 +180,115 @@ function register(context, { resolveInterpreter }) {
 		});
 		if (result.error) return;
 
+		// A case module may have moved or appeared since the last discovery.
+		group.paths.clear();
+
+		const kept = new Set();
+		const present = new Set();
+		const byName = new Map();
 		const used = new Set();
+
 		for (const record of records) {
 			const file = await sourcePath(folder, suite, record.file, group);
 			const line = typeof record.line === "number" ? record.line : 0;
-			const uri = file ? vscode.Uri.file(file) : undefined;
-			const key = `${record.file}|${line}|${record.name}`;
+			const key = file || record.file || "";
+			present.add(key);
 
-			let fileItem = group.files.get(file || record.file || "");
+			let fileItem = group.files.get(key);
 			if (!fileItem) {
 				fileItem = controller.createTestItem(
-					`file:${file || record.file || "suite"}`,
+					`file:${key}`,
 					file ? path.basename(file) : record.file || "suite",
-					uri
+					file ? vscode.Uri.file(file) : undefined
 				);
 				details.set(fileItem, { folder, suite, file });
-				group.files.set(file || record.file || "", fileItem);
-				root.children.add(fileItem);
+				group.files.set(key, fileItem);
+				group.root.children.add(fileItem);
 			}
 
-			let id = `test:${key}`;
-			for (let n = 2; used.has(id); n += 1) id = `test:${key}#${n}`;
-			used.add(id);
+			// The same check, if one of this file's items already has its name.
+			let test = [...fileItem.children].find(
+				(child) => !kept.has(child) && (details.get(child) || {}).name === record.name
+			);
+			if (test) {
+				const detail = details.get(test);
+				if (line > 0 && detail.line !== line) {
+					detail.line = line;
+					test.range = new vscode.Range(line - 1, 0, line - 1, 0);
+				}
+				used.add(test.id);
+			} else {
+				const base = `test:${record.file}|${line}|${record.name}`;
+				let id = base;
+				for (let n = 2; used.has(id); n += 1) id = `${base}#${n}`;
+				used.add(id);
+				test = controller.createTestItem(
+					id,
+					record.name,
+					file ? vscode.Uri.file(file) : undefined
+				);
+				if (line > 0) test.range = new vscode.Range(line - 1, 0, line - 1, 0);
+				details.set(test, { folder, suite, file, line, name: record.name });
+				fileItem.children.add(test);
+			}
 
-			const test = controller.createTestItem(id, record.name, uri);
-			if (line > 0) test.range = new vscode.Range(line - 1, 0, line - 1, 0);
-			details.set(test, { folder, suite, file, line, name: record.name });
-			fileItem.children.add(test);
-			const named = group.byName.get(record.name) || [];
+			kept.add(test);
+			const named = byName.get(record.name) || [];
 			named.push(test);
-			group.byName.set(record.name, named);
+			byName.set(record.name, named);
 		}
+
+		// Whatever the suite no longer reports goes, file items with nothing left included.
+		for (const [key, fileItem] of [...group.files]) {
+			if (!present.has(key)) {
+				group.root.children.delete(fileItem);
+				group.files.delete(key);
+				continue;
+			}
+			for (const child of [...fileItem.children]) {
+				if (!kept.has(child)) fileItem.children.delete(child);
+			}
+		}
+		group.byName = byName;
+	}
+
+	// The checks live in the project's `.ms` files, so a save, an addition or a deletion
+	// anywhere in the folder may change the suite's list. The panel asks again once the
+	// editing settles, instead of waiting for the window to be reloaded.
+	const waiting = new Map();
+
+	function watch(folder) {
+		const watcher = vscode.workspace.createFileSystemWatcher(
+			new vscode.RelativePattern(folder, "**/*.ms")
+		);
+		const touched = () => {
+			const key = folder.uri.fsPath;
+			const timer = waiting.get(key);
+			if (timer) clearTimeout(timer);
+			waiting.set(
+				key,
+				setTimeout(() => {
+					waiting.delete(key);
+					const group = groups.get(key);
+					if (group) fill(group);
+				}, REFRESH)
+			);
+		};
+		watcher.onDidChange(touched);
+		watcher.onDidCreate(touched);
+		watcher.onDidDelete(touched);
+		context.subscriptions.push(watcher);
 	}
 
 	controller.resolveHandler = async (item) => {
 		if (item) return;
 		for (const folder of vscode.workspace.workspaceFolders || []) {
+			if (groups.has(folder.uri.fsPath)) continue;
 			const suite = suitePath(folder);
-			if (suite && fs.existsSync(suite)) await discover(folder, suite);
+			if (suite && fs.existsSync(suite)) {
+				await discover(folder, suite);
+				watch(folder);
+			}
 		}
 	};
 
@@ -351,6 +442,13 @@ function register(context, { resolveInterpreter }) {
 			}
 			return;
 		}
+
+		// The panel counts items; the suite is the authority on what it ran, and its skipped
+		// total has no item of its own to land on, so it is written where a run's text goes.
+		run.appendOutput(
+			`${group.folder.name}: ${result.end.passed ?? 0} passed, ` +
+				`${result.end.failed ?? 0} failed, ${result.end.skipped ?? 0} skipped\r\n`
+		);
 
 		for (const item of target.items) {
 			if (!seen.has(item)) run.skipped(item);

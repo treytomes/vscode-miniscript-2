@@ -38,15 +38,26 @@ function record(name, line) {
 	return `print "${text.replace(/"/g, '""')}"`;
 }
 
-// Writes a suite whose two checks report the given lines, so a test can edit the file
-// above them and move both of them the way an edit in a case module does.
-function writeSuite(first, second) {
+// Writes a suite that reports the given checks, so a test can edit the file and move,
+// add or remove them the way an edit in a case module does.
+function writeSuiteWith(checks, end) {
+	const last = checks.reduce((most, check) => Math.max(most, check.line), 0);
 	const lines = [];
-	for (let n = 1; n <= second; n += 1) lines.push("// filler");
-	lines[first - 1] = record("first", first);
-	lines[second - 1] = record("second", second);
-	lines.push(`print "##END {""passed"":2,""failed"":0,""skipped"":0}"`);
+	for (let n = 1; n <= last; n += 1) lines.push("// filler");
+	for (const check of checks) lines[check.line - 1] = record(check.name, check.line);
+	const totals = JSON.stringify(end || { passed: checks.length, failed: 0, skipped: 0 });
+	lines.push(`print "##END ${totals.replace(/"/g, '""')}"`);
 	fs.writeFileSync(suitePath, `${lines.join("\n")}\n`);
+}
+
+function writeSuite(first, second, end) {
+	writeSuiteWith(
+		[
+			{ name: "first", line: first },
+			{ name: "second", line: second },
+		],
+		end
+	);
 }
 
 class Range {
@@ -119,6 +130,9 @@ function controller() {
 	return made;
 }
 
+// Every file-system watcher the panel asks for, so a test can play the save it would see.
+const watchers = [];
+
 const vscode = {
 	tests: { createTestController: () => controller() },
 	workspace: {
@@ -129,6 +143,18 @@ const vscode = {
 			get: (key, fallback) => (key === "testSuite" ? path.basename(suitePath) : fallback),
 		}),
 		findFiles: async () => [],
+		createFileSystemWatcher: (pattern) => {
+			const handlers = { change: [], create: [], delete: [] };
+			const watcher = {
+				pattern,
+				onDidChange: (handler) => handlers.change.push(handler),
+				onDidCreate: (handler) => handlers.create.push(handler),
+				onDidDelete: (handler) => handlers.delete.push(handler),
+				dispose() {},
+			};
+			watchers.push({ watcher, handlers });
+			return watcher;
+		},
 	},
 	Uri: { file: (fsPath) => ({ fsPath, scheme: "file" }) },
 	Range,
@@ -156,16 +182,41 @@ const token = {
 };
 
 function panel() {
+	watchers.length = 0;
 	return register(
 		{ subscriptions: [] },
 		{ resolveInterpreter: () => ({ command: interpreter }) }
 	);
 }
 
-async function discover(controller) {
-	await controller.resolveHandler();
+function items(controller) {
 	const root = [...controller.items.children][0];
 	return [...[...root.children][0].children];
+}
+
+async function discover(controller) {
+	await controller.resolveHandler();
+	return items(controller);
+}
+
+function wait(ms) {
+	return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Discovery is a run of the suite behind a short debounce, so a test waits for the tree
+// rather than guessing at how long the interpreter takes.
+async function until(done, timeout = 5000) {
+	const started = Date.now();
+	while (Date.now() - started < timeout) {
+		if (done()) return true;
+		await wait(50);
+	}
+	return false;
+}
+
+// The save the watcher would see: a `.ms` file in the suite's folder changed.
+function touched() {
+	for (const handler of watchers[0].handlers.change) handler({});
 }
 
 function run(controller, include) {
@@ -197,6 +248,78 @@ test("a check whose file gained lines still reports its result", { skip }, async
 	);
 	assert.equal(results.passedItems.length, 1, "the check passed at its new line");
 	assert.equal(first.range.startLine, 10, "the item followed the check to line 11");
+});
+
+test("a check added to the suite appears without a reload", { skip }, async () => {
+	writeSuite(4, 5);
+	const panelUnderTest = panel();
+	const before = await discover(panelUnderTest);
+	assert.equal(before.length, 2);
+	assert.equal(watchers.length, 1, "the folder's .ms files are watched");
+
+	writeSuiteWith([
+		{ name: "first", line: 4 },
+		{ name: "second", line: 5 },
+		{ name: "third", line: 9 },
+	]);
+	touched();
+
+	assert.ok(await until(() => items(panelUnderTest).length === 3), "the panel caught up");
+	assert.deepEqual(items(panelUnderTest).map((check) => check.label).sort(), [
+		"first",
+		"second",
+		"third",
+	]);
+	assert.equal(
+		items(panelUnderTest).find((check) => check.label === "first"),
+		before[0],
+		"a check still in the suite keeps its item"
+	);
+});
+
+test("a check removed from the suite leaves the panel", { skip }, async () => {
+	writeSuiteWith([
+		{ name: "first", line: 4 },
+		{ name: "second", line: 5 },
+		{ name: "third", line: 9 },
+	]);
+	const panelUnderTest = panel();
+	assert.equal((await discover(panelUnderTest)).length, 3);
+
+	writeSuite(4, 5);
+	touched();
+
+	assert.ok(await until(() => items(panelUnderTest).length === 2), "the panel caught up");
+	assert.deepEqual(items(panelUnderTest).map((check) => check.label).sort(), [
+		"first",
+		"second",
+	]);
+});
+
+test("a check moved by an edit follows to its new line", { skip }, async () => {
+	writeSuite(4, 5);
+	const panelUnderTest = panel();
+	const before = await discover(panelUnderTest);
+
+	writeSuite(9, 10);
+	touched();
+
+	assert.ok(
+		await until(() => items(panelUnderTest)[0].range.startLine === 8),
+		"the panel caught up"
+	);
+	const after = items(panelUnderTest);
+	assert.equal(after[0], before[0], "the same item, with its last result still on it");
+	assert.equal(after[1].range.startLine, 9);
+});
+
+test("the suite's skipped total is shown with the run", { skip }, async () => {
+	writeSuite(4, 5, { passed: 2, failed: 0, skipped: 1 });
+	const panelUnderTest = panel();
+	await discover(panelUnderTest);
+	await run(panelUnderTest, undefined);
+
+	assert.match(panelUnderTest.lastRun.output.join(""), /2 passed, 0 failed, 1 skipped/);
 });
 
 test("a whole suite that moved is still reported as passes", { skip }, async () => {
