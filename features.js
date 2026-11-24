@@ -1,11 +1,13 @@
 // features.js — the VS Code side of symbols.js: the hover tooltip, Go to Definition
-// (Ctrl-click) and the Outline view. The scan is in symbols.js, the language's own
-// intrinsics in builtins.js, so this file only turns those records into what the providers
-// return.
+// (Ctrl-click) and the Outline view, and the squiggles lint.js finds shown in a
+// DiagnosticCollection. The scan is in symbols.js, the language's own intrinsics in
+// builtins.js, so this file only turns those records into what the providers return.
 
+const fs = require("fs");
 const path = require("path");
 const vscode = require("vscode");
 const builtins = require("./builtins");
+const { lint, importTargets } = require("./lint");
 const { KEYWORDS, SCOPES, inLiteral, innermost, locate, scan, typeOf } = require("./symbols");
 
 const WORD = /[A-Za-z_][A-Za-z0-9_]*/;
@@ -143,6 +145,24 @@ function moduleSymbol(name, target) {
 		signature: `import "${target}"`,
 		comment: `Imports ${target}.ms.`,
 	};
+}
+
+const SEVERITY = {
+	error: vscode.DiagnosticSeverity.Error,
+	warning: vscode.DiagnosticSeverity.Warning,
+};
+
+// A lint record is one line of text; a Diagnostic wants a range and a severity.
+function toDiagnostic(found) {
+	const range = new vscode.Range(found.line, found.character, found.line, found.endCharacter);
+	const diagnostic = new vscode.Diagnostic(
+		range,
+		found.message,
+		SEVERITY[found.severity] ?? SEVERITY.warning
+	);
+	diagnostic.code = found.code;
+	diagnostic.source = "miniscript2";
+	return diagnostic;
 }
 
 function nameRange(symbol) {
@@ -315,10 +335,84 @@ function outline(document, index) {
 	return roots;
 }
 
+// How long typing settles before a file is checked again.
+const DEBOUNCE = 250;
+
 function register(context) {
 	const index = createIndex();
+	const diagnostics = vscode.languages.createDiagnosticCollection("miniscript2");
+	const timers = new Map();
+
+	// The documents the providers serve are the ones worth linting.
+	function watched(document) {
+		return SELECTOR.some(
+			(selector) => selector.language === document.languageId && selector.scheme === document.uri.scheme
+		);
+	}
+
+	// Where an import's file would be, in the order the interpreter looks: a path relative
+	// to the file itself (`"../src/triples"`), then the workspace's own files, which is the
+	// lookup Ctrl-click uses too. Nothing is claimed where neither can look.
+	function resolver(document) {
+		const folder =
+			document.uri.scheme === "file" ? path.dirname(document.uri.fsPath) : undefined;
+		return async (target) => {
+			if (target.startsWith(".")) {
+				return folder ? fs.existsSync(path.resolve(folder, `${target}.ms`)) : undefined;
+			}
+			return Boolean(await index.moduleUri(target));
+		};
+	}
+
+	// The scan and the checks are lint.js's; what this adds is the one thing a file cannot
+	// answer alone - whether each import names a file.
+	async function check(document) {
+		if (!watched(document)) return;
+		const text = document.getText();
+		const version = document.version;
+
+		let moduleExists;
+		if ((vscode.workspace.workspaceFolders || []).length) {
+			const exists = resolver(document);
+			const known = new Map();
+			for (const { target } of importTargets(text)) known.set(target, await exists(target));
+			// The file changed while the workspace was being asked; the newer text is about
+			// to be checked, so this answer is stale.
+			if (document.version !== version) return;
+			moduleExists = (target) => known.get(target);
+		}
+
+		diagnostics.set(document.uri, lint(text, { moduleExists }).map(toDiagnostic));
+	}
+
+	function later(document) {
+		if (!watched(document)) return;
+		const key = document.uri.toString();
+		const timer = timers.get(key);
+		if (timer) clearTimeout(timer);
+		timers.set(
+			key,
+			setTimeout(() => {
+				timers.delete(key);
+				check(document).catch(() => {});
+			}, DEBOUNCE)
+		);
+	}
+
+	function forget(uri) {
+		const key = uri.toString();
+		const timer = timers.get(key);
+		if (timer) clearTimeout(timer);
+		timers.delete(key);
+		diagnostics.delete(uri);
+	}
+
+	async function checkAll() {
+		for (const document of vscode.workspace.textDocuments || []) await check(document);
+	}
 
 	context.subscriptions.push(
+		diagnostics,
 		vscode.languages.registerHoverProvider(SELECTOR, {
 			provideHover: (document, position) => hover(document, position, index),
 		}),
@@ -331,9 +425,20 @@ function register(context) {
 		vscode.workspace.onDidChangeTextDocument((event) => index.forget(event.document.uri)),
 		vscode.workspace.onDidSaveTextDocument(() => index.forgetWorkspace()),
 		vscode.workspace.onDidCreateFiles(() => index.forgetWorkspace()),
-		vscode.workspace.onDidDeleteFiles(() => index.forgetWorkspace())
+		vscode.workspace.onDidDeleteFiles(() => index.forgetWorkspace()),
+		// The index is cleared above before anything here asks it a question.
+		vscode.workspace.onDidOpenTextDocument((document) => check(document).catch(() => {})),
+		vscode.workspace.onDidChangeTextDocument((event) => later(event.document)),
+		vscode.workspace.onDidCloseTextDocument((document) => forget(document.uri)),
+		// An import lives or dies with the files around it, so a save, a creation or a
+		// deletion rechecks every open file - the saved one included, since it is in
+		// textDocuments like the rest.
+		vscode.workspace.onDidSaveTextDocument(() => checkAll().catch(() => {})),
+		vscode.workspace.onDidCreateFiles(() => checkAll().catch(() => {})),
+		vscode.workspace.onDidDeleteFiles(() => checkAll().catch(() => {}))
 	);
 
+	checkAll().catch(() => {});
 	return index;
 }
 

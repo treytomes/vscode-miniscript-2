@@ -192,4 +192,10 @@ function member(name, type) {
 	return found;
 }
 
-module.exports = { global, member };
+// Every member name a type's values have, for a "did you mean" list.
+function membersOf(type) {
+	const members = MEMBERS[type];
+	return members ? Object.keys(members) : [];
+}
+
+module.exports = { global, member, membersOf };

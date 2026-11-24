@@ -3,7 +3,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { scan, locate, typeOf, inLiteral } = require("../symbols.js");
+const { scan, statements, locate, typeOf, inLiteral } = require("../symbols.js");
 
 function named(symbols, name, receiver) {
 	return symbols.find(
@@ -218,4 +218,25 @@ test("a name inside a string or a comment is not a reference", () => {
 	assert.equal(inLiteral(text, 0, 8), true);
 	assert.equal(inLiteral(text, 1, 8), true);
 	assert.equal(inLiteral(text, 1, 0), false);
+});
+
+test("a semicolon ends a statement, so a one-line function is three", () => {
+	const text = 'f = function(n); return n + 1; end function';
+	assert.deepEqual(
+		statements(text).map((statement) => statement.tokens.map((token) => token.value)),
+		[
+			["f", "=", "function", "(", "n", ")"],
+			["return", "n", "+", "1"],
+			["end", "function"],
+		]
+	);
+});
+
+test("a string that spells an operator ends its statement", () => {
+	// `">"` is a value, not a continuation: the line after it is a statement of its own.
+	const text = ['label = "x" + ">"', 'if label != "" then', "\tprint label", "end if"].join("\n");
+	assert.deepEqual(
+		statements(text).map((statement) => statement.line),
+		[0, 1, 2, 3]
+	);
 });

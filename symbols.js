@@ -148,12 +148,23 @@ function statements(text) {
 		}
 		if (!current) current = { line: n, tokens: [] };
 		for (const token of code) {
+			// A `;` at the top level ends one statement and starts the next, which is how a
+			// one-line function is written: `f = function(n); return n; end function`.
+			if (token.type === "punct" && token.value === ";" && depth <= 0) {
+				flush();
+				current = { line: n, tokens: [] };
+				continue;
+			}
 			current.tokens.push(token);
 			if (token.type === "punct" && OPENERS.includes(token.value)) depth += 1;
 			else if (token.type === "punct" && CLOSERS.includes(token.value)) depth -= 1;
 		}
+		// Only an operator or a keyword continues a statement onto the next line: a string
+		// that happens to spell one (`">"` or `"and"`) ends it like any other value.
 		const last = current.tokens[current.tokens.length - 1];
-		if (depth <= 0 && !(last && CONTINUES.has(last.value))) flush();
+		const continues =
+			last && (last.type === "punct" || last.type === "word") && CONTINUES.has(last.value);
+		if (depth <= 0 && !continues) flush();
 	}
 	flush();
 	return out;
@@ -458,6 +469,7 @@ function typeOf(found, { name, line }) {
 module.exports = {
 	KEYWORDS,
 	SCOPES,
+	statements,
 	scan,
 	locate,
 	typeOf,

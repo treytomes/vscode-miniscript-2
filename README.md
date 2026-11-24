@@ -17,6 +17,9 @@ suite in the Testing panel.
   intrinsic like `print` for what it does, Ctrl-click a name to jump to where it is
   defined, and read the file's functions, methods and classes in the Outline view. See
   below.
+- **Squiggles before the run** — a member no type has, a block that never closes, and an
+  `import` that names no file are marked as you type, with a "did you mean" for the
+  first. See below.
 - **Notebooks** — a `.msnb` file is a column of cells, each run with Shift+Enter against
   one MiniScript session, its output underneath, pictures a cell draws included. See below.
 - **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
@@ -139,6 +142,34 @@ Ctrl-clicking `knowledge.loadFacts` reads that file, and Ctrl-clicking the strin
 looked for in the workspace's other `.ms` files, and Ctrl-click lists every file that
 defines it.
 
+## Squiggles before the run
+
+Three problems are marked as you type, without starting the interpreter:
+
+- **A member the type does not have.** `s = "hi"` makes `s.lengh` a warning, and hovering
+  it says what was probably meant: *`string` has no member `lengh`. Did you mean `len`?*
+  Only a receiver whose type the file can prove — a string or a list — is judged, and
+  `m.anything` is never reported, since every key of a map is a member. A file that adds a
+  member to a type (`string.shout = function`) turns the check off for that type. The
+  interpreter only finds the mistake when the line runs (`Key Not Found`), which is why it
+  is a warning rather than an error.
+- **A block that never closes.** `if`, `for`, `while` and `function` are each closed by
+  their own `end`. An `end function` inside a still-open `if` is reported on the `end`
+  line with the fix — *add `end if` before it* — and a file that ends with a block open is
+  reported where it opened. A short-form `if x then y` opens nothing, a one-line function
+  (`f = function(n); return n; end function`) closes on its own line, and an `else if`
+  chain is still one `if`. This one is an error: the file does not compile.
+- **An import that names no file.** `import "missing"` is marked on the path itself when
+  there is no `missing.ms` in the workspace, and a path relative to the file
+  (`import "../src/triples"`) is looked for beside it, the way the interpreter looks. It
+  is a warning, since a module can also sit on `MS_IMPORT_PATH`, outside the workspace.
+  With no workspace folder to search, imports are not judged at all, so a scratch file is
+  never told its imports are missing.
+
+Nothing is run and nothing is written: the same text scan behind the tooltips and the
+Outline answers these, so a file the interpreter could not start is still read. The
+squiggles follow your edits, refreshed shortly after typing stops.
+
 ## Using the Testing panel
 
 Your suite runs inside VS Code's own Test Explorer — the same panel every other language
@@ -237,13 +268,15 @@ CommonJS, and VS Code supplies its own `vscode` module.
 
 - Open this folder in VS Code and press `F5`; the checked-in `.vscode/launch.json` starts
   an Extension Development Host with this folder as the development extension.
-- `npm test` (`node --test`) runs the symbol scanner's tests, the Testing panel's tests,
-  and the notebook's tests: its file format and controller against a stub `vscode`, and
-  its cell protocol against the real interpreter. Those tests skip when `../3rd-party` has
-  no interpreter and `MINISCRIPT_EXE_PATH` is unset.
+- `npm test` (`node --test`) runs the symbol scanner's tests, the lint pass's, the
+  diagnostics' wiring against a stub `vscode`, the Testing panel's tests, and the
+  notebook's tests: its file format and controller against a stub `vscode`, and its cell
+  protocol against the real interpreter. Those tests skip when `../3rd-party` has no
+  interpreter and `MINISCRIPT_EXE_PATH` is unset.
 - `symbols.js` reads a file into symbols (nothing in it requires `vscode`); `builtins.js`
-  is the table of intrinsic functions and methods; `features.js` turns both into the
-  hover, definition and outline providers.
+  is the table of intrinsic functions and methods; `lint.js` finds the problems those two
+  can see without running the file; `features.js` turns them into the hover, definition
+  and outline providers and the diagnostics.
 - `notebook-session.js` is the cell protocol — the interpreter process, what is written
   to it, and how its output is read back — and uses no `vscode`, so it is tested against
   the interpreter itself; `notebook.js` is the `.msnb` serializer and the controller
