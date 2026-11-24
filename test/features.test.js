@@ -863,6 +863,60 @@ test("a notebook cell is colored the same way", async () => {
 	assert.equal(kindOf(tokens, 3, 6), "function");
 });
 
+// A field a constructor sets with `self.sides = 0` is a member of the class, so an
+// instance's own field hovers, jumps, completes and counts in references like its methods -
+// and is still not a name rename will touch.
+test("a field a constructor sets is a member of the instance", async () => {
+	activate();
+	const doc = document(
+		[
+			"Shape = {}",
+			"Shape.new = function(sides)",
+			"\tself.sides = sides",
+			"\tself.origin = 0",
+			"end function",
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"sq = new Shape(4)",
+			"print sq.sides",
+			"print sq.",
+		].join("\n")
+	);
+
+	const hover = await opened.hover.provideHover(doc, { line: 9, character: 10 });
+	assert.match(hover.contents.value, /self\.sides = sides/);
+	assert.match(hover.contents.value, /field/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 9, character: 10 });
+	assert.deepEqual(locations[0].range.start, { line: 2, character: 6 });
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 2, character: 6 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		found.map((location) => location.range.start.line),
+		[2, 9],
+		"the field's own line and the instance's use"
+	);
+
+	const tokens = await opened.tokens.provideDocumentSemanticTokens(doc);
+	assert.equal(kindOf(tokens, 9, 9), "variable", "a field holds a value; it is not called");
+
+	const members = labels(await completionAt(doc, 10, 9));
+	assert.ok(members.includes("sides"), "the field");
+	assert.ok(members.includes("origin"), "another field");
+	assert.ok(members.includes("degrees"), "and the method");
+
+	assert.equal(
+		opened.rename.prepareRename(doc, { line: 9, character: 10 }),
+		undefined,
+		"a field is not a local"
+	);
+});
+
 // The scans read `sq.degrees` as `Shape.degrees` too, so finding or renaming one finds the
 // other, and a local spelled the same does not take the method's uses away.
 test("references follow an instance to its class's method", async () => {

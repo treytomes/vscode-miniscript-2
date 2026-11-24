@@ -224,6 +224,51 @@ test("a name made with new says which class made it", () => {
 	assert.equal(classOf(symbols, { name: "nowhere", line: 1 }), undefined);
 });
 
+test("a field a method sets on self belongs to its class", () => {
+	const symbols = scan(
+		[
+			"Shape = {}",
+			"Shape.new = function(sides)",
+			"\tself.sides = sides",
+			"\tself.origin = 0",
+			"end function",
+		].join("\n")
+	);
+
+	const sides = named(symbols, "sides", "Shape");
+	assert.equal(sides.kind, "field");
+	assert.equal(sides.container, undefined, "a field is not a local, so it cannot be renamed");
+	assert.deepEqual([sides.line, sides.character], [2, 6]);
+	assert.equal(sides.signature, "self.sides = sides");
+	assert.equal(named(symbols, "origin", "Shape").kind, "field");
+	assert.equal(named(symbols, "sides").kind, "parameter", "the method's own parameter is still one");
+});
+
+test("a field the class also gives keeps the class's own line, and two methods one field", () => {
+	const symbols = scan(
+		[
+			"Shape = {}",
+			"Shape.sides = 0",
+			"Shape.new = function",
+			"\tself.sides = 0",
+			"\tself.other = 1",
+			"end function",
+			"Shape.reset = function",
+			"\tself.other = 2",
+			"end function",
+		].join("\n")
+	);
+
+	const sides = symbols.filter((symbol) => symbol.name === "sides");
+	assert.equal(sides.length, 1);
+	assert.equal(sides[0].kind, "variable");
+	assert.equal(sides[0].line, 1);
+
+	const other = symbols.filter((symbol) => symbol.name === "other");
+	assert.equal(other.length, 1, "the first field of that name is the one kept");
+	assert.equal(other[0].line, 4);
+});
+
 test("a name inside a string or a comment is not a reference", () => {
 	const text = ["// call add later", "print \"add\""].join("\n");
 	assert.equal(inLiteral(text, 0, 8), true);

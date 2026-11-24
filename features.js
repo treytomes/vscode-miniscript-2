@@ -51,6 +51,9 @@ const COMPLETION_KINDS = {
 // The kinds of symbol whose body spans lines, so a position can be read as inside one.
 const FUNCTION_KINDS = new Set(["function", "method"]);
 
+// What a receiver can have: its methods, and the fields a constructor sets on it.
+const MEMBER_KINDS = new Set(["method", "field"]);
+
 // What the editor colors, and what each one means: the kinds of name the file itself
 // defines, plus the language's own names, which no file defines. The theme chooses the
 // colors; the legend says which type each name is, and `defaultLibrary` marks an intrinsic
@@ -81,8 +84,8 @@ function enclosingMethod(symbols, line) {
 	return owners[owners.length - 1];
 }
 
-// The method a receiver's member names, read the way hover, completion and the scans all
-// read it: the receiver's own method when the file gave one, `self`/`super` reaching the
+// The member a receiver's name means, read the way hover, completion and the scans all
+// read it: the receiver's own member when the file gave one, `self`/`super` reaching the
 // enclosing method's class, and `sq = new Shape` reaching the class that made `sq`.
 function methodAt(symbols, receiver, name, line) {
 	if (!receiver) return undefined;
@@ -437,8 +440,12 @@ function outline(document, index) {
 	const found = index.forDocument(document);
 	// Parameters and locals would bury the functions in the tree, so only what a file
 	// offers the rest of the project is listed.
+	// A field is seen through an instance, not listed where the file's own names are.
 	const listed = found.filter(
-		(symbol) => symbol.kind !== "parameter" && !(symbol.kind === "variable" && symbol.container)
+		(symbol) =>
+			symbol.kind !== "parameter" &&
+			symbol.kind !== "field" &&
+			!(symbol.kind === "variable" && symbol.container)
 	);
 	const items = new Map();
 	for (const symbol of listed) {
@@ -489,7 +496,7 @@ function rangesOf(document, symbols, target, includeDeclaration) {
 // Whether `receiver.name` is this method: the receiver it was defined on, `self` and
 // `super` inside that class, or an instance `new` made from it.
 function memberOf(symbols, tokens, index, line, target) {
-	if (target.kind !== "method" || !target.receiver) return false;
+	if (!MEMBER_KINDS.has(target.kind) || !target.receiver) return false;
 	const receiver = tokens[index - 2];
 	if (!receiver) return false;
 	if (receiver.value === target.receiver) return true;
@@ -564,7 +571,7 @@ async function workspaceSymbols(query, index) {
 	const uris = await vscode.workspace.findFiles("**/*.ms", "**/node_modules/**", 500);
 	for (const uri of uris) {
 		for (const symbol of await index.forUri(uri)) {
-			if (symbol.kind === "parameter" || symbol.container) continue;
+			if (symbol.kind === "parameter" || symbol.kind === "field" || symbol.container) continue;
 			if (!symbol.name.toLowerCase().includes(search)) continue;
 			found.push(
 				new vscode.SymbolInformation(
@@ -671,12 +678,13 @@ async function memberItems(index, here, imports, receiver, line) {
 	}
 
 	// `self` is the instance of the class the enclosing method belongs to, and `super` is
-	// the same instance's prototype: both reach that class's methods.
+	// the same instance's prototype: both reach that class's members.
 	if (receiver === "self" || receiver === "super") {
 		const owner = innermost(here, line, { kinds: FUNCTION_KINDS });
 		const type = owner && owner.kind === "method" ? owner.receiver : undefined;
 		for (const symbol of here) {
-			if (symbol.kind === "method" && (!type || symbol.receiver === type)) add(symbolItem(symbol));
+			if (!MEMBER_KINDS.has(symbol.kind) || (type && symbol.receiver !== type)) continue;
+			add(symbolItem(symbol));
 		}
 		return items;
 	}
@@ -694,12 +702,12 @@ async function memberItems(index, here, imports, receiver, line) {
 		if (symbol.kind === "method" && symbol.receiver === receiver) add(symbolItem(symbol));
 	}
 
-	// `sq = new Shape` completes the methods of the class that made it, before the map's
-	// own members, which an instance has too.
+	// `sq = new Shape` completes the class that made it - its methods and the fields a
+	// constructor set - before the map's own members, which an instance has too.
 	const made = classOf(here, { name: receiver, line });
 	if (made) {
 		for (const symbol of here) {
-			if (symbol.kind === "method" && symbol.receiver === made) add(symbolItem(symbol));
+			if (MEMBER_KINDS.has(symbol.kind) && symbol.receiver === made) add(symbolItem(symbol));
 		}
 	}
 
@@ -833,18 +841,24 @@ async function signatureHelp(document, position, index) {
 // The member after a dot, read the way hover reads it: a method this file gives that
 // receiver, or an intrinsic of the receiver's proven type. `self` and `super` reach the
 // class the enclosing method belongs to.
+// A field of a class is colored as a variable: it holds a value, it is not called.
+function memberKindOf(symbol) {
+	return symbol.kind === "field" ? "variable" : "method";
+}
+
 function memberKind(symbols, tokens, index, line) {
 	const token = tokens[index];
 	const receiver = tokens[index - 2];
 	if (!receiver || receiver.type !== "word") return undefined;
 	const found = locate(symbols, { name: token.value, line });
+	const member = found && MEMBER_KINDS.has(found.kind) ? found : undefined;
 	if (receiver.value === "self" || receiver.value === "super") {
 		const owner = enclosingMethod(symbols, line);
-		return owner && found && found.receiver === owner.receiver ? "method" : undefined;
+		return member && owner && member.receiver === owner.receiver ? memberKindOf(member) : undefined;
 	}
-	if (found && found.kind === "method" && found.receiver === receiver.value) return "method";
+	if (member && member.receiver === receiver.value) return memberKindOf(member);
 	const made = classOf(symbols, { name: receiver.value, line });
-	if (made && found && found.kind === "method" && found.receiver === made) return "method";
+	if (made && member && member.receiver === made) return memberKindOf(member);
 	const type = typeOf(symbols, { name: receiver.value, line });
 	return type && builtins.member(token.value, type).length ? "intrinsic" : undefined;
 }
@@ -878,7 +892,7 @@ function semanticTokens(document, index) {
 				kind = symbol ? symbol.kind : builtins.global(token.value) ? "intrinsic" : undefined;
 			}
 
-			const type = TOKEN_TYPE.get(kind);
+			const type = TOKEN_TYPE.get(kind === "field" ? "variable" : kind);
 			if (type === undefined) continue;
 			builder.push(
 				line,

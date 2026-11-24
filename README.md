@@ -160,7 +160,9 @@ A member's type is read from the value the receiver was given, so `s = "text"` m
 listed. `self.name` and `super.name` are the exception that needs no type: inside a method
 they reach the class the method belongs to, so a method called through `self` gets that
 method's tooltip, its jump and its parameters. `sq = new Shape` says the same for the
-instance, so `sq.method` is the method `Shape` was given.
+instance, so `sq.method` is the method `Shape` was given. A field a method sets
+(`self.sides = 0`) is a member of the class too, so `sq.sides` has a tooltip showing the
+line that set it, and a jump to it.
 
 **The Outline** (and the breadcrumb above the editor) lists the file's functions,
 methods, classes and top-level variables, with a method under its class and a nested
@@ -184,7 +186,8 @@ workspace's other `.ms` files, and Ctrl-click lists every file that defines it.
 cursor is written — the declaration too, when the editor asks for it — and **Rename**
 (`F2`) rewrites them. A call through an instance counts: after `sq = new Shape`,
 `sq.degrees` is one of `Shape.degrees`'s uses, the same reading hover and Ctrl-click give,
-and a local spelled `degrees` does not take it away. Rename is offered for a local or a
+and a local spelled `degrees` does not take it away. A field is found through the instance
+that way too: `sq.sides` is a use of the `sides` a method set with `self.sides = 0`. Rename is offered for a local or a
 parameter and for nothing else: a name at the file's top level can be used from files this
 one has not read, and rewriting only the uses it can see would be a quiet mistake — while a
 member access is never renamed as the local it happens to be spelled like.
@@ -242,8 +245,9 @@ squiggles follow your edits, refreshed shortly after typing stops.
 parameters first, then the file's top level, then the modules it imports by name. After a
 `.` the list is that receiver's — `s.` offers the string's own members, `xs.` the list's,
 `file.` the file module's, `Shape.` the methods the file gave that class, `sq.` those same
-methods when `sq = new Shape` made it (the map's own members are still there, since an
-instance is a map), and `lib.` the names `import "lib"` brings in. Nothing is offered
+methods and the fields a constructor set when `sq = new Shape` made it (the map's own
+members are still there, since an instance is a map), and `lib.` the names `import "lib"`
+brings in. Nothing is offered
 inside a string or a comment, where a name is text, and a receiver whose type the file
 cannot prove offers only what the file defines on it.
 

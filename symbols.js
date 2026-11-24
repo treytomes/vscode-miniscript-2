@@ -330,6 +330,16 @@ function innermost(found, line, { skip, kinds } = {}) {
 	return best;
 }
 
+// The class whose `self` an assignment reaches: the nearest enclosing method, since a
+// function nested inside one still shares that self.
+function openClass(blocks) {
+	for (let i = blocks.length - 1; i >= 0; i -= 1) {
+		const symbol = blocks[i].kind === "function" && blocks[i].symbol;
+		if (symbol && symbol.receiver) return symbol.receiver;
+	}
+	return undefined;
+}
+
 // The function whose body an open block sits in, from the stack of blocks being read.
 function openFunction(blocks) {
 	for (let i = blocks.length - 1; i >= 0; i -= 1) {
@@ -391,9 +401,25 @@ function scan(text) {
 		const definition = assignment(tokens);
 		if (!definition) continue;
 
-		// `self.x = 1` and `super.x = 1` store into an object, they do not name a symbol
-		// this file defines; `globals.x` is this file's own x, kept as a top-level name.
-		if (SCOPES.has(definition.receiver)) continue;
+		// `self.x = 1` gives the enclosing method's class a field: `sq.x` is a member of it,
+		// though not a name this file can rename. `super.x`, a local's `x` and `globals.x`
+		// are not members - `globals.x` is this file's own top-level x.
+		if (SCOPES.has(definition.receiver)) {
+			const className = definition.receiver === "self" ? openClass(blocks) : undefined;
+			if (className) {
+				found.push({
+					name: definition.name,
+					kind: "field",
+					receiver: className,
+					line: definition.token.line,
+					character: definition.token.start,
+					endLine: definition.token.line,
+					comment: commentAbove(lines, statement.line),
+					signature: sourceText(lines, tokens),
+				});
+			}
+			continue;
+		}
 
 		const owner = openFunction(blocks);
 		const symbol = {
@@ -439,7 +465,22 @@ function scan(text) {
 		if (isClass(symbol, value)) symbol.kind = "class";
 		found.push(symbol);
 	}
-	return found;
+
+	// A field a method sets and a value the class itself gives are the same member: the
+	// class's own line is the one to show, and two methods setting one name keep the first.
+	const declared = new Set(
+		found
+			.filter((symbol) => symbol.kind !== "field" && symbol.receiver)
+			.map((symbol) => `${symbol.receiver}.${symbol.name}`)
+	);
+	const seen = new Set();
+	return found.filter((symbol) => {
+		if (symbol.kind !== "field") return true;
+		const key = `${symbol.receiver}.${symbol.name}`;
+		if (declared.has(key) || seen.has(key)) return false;
+		seen.add(key);
+		return true;
+	});
 }
 
 // The class a name was made from, `sq = new Shape`, when every assignment to it in its
