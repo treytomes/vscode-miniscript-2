@@ -186,8 +186,9 @@ defines on it.
 
 While a call is being written, its parameters are shown in the parameter popup with the
 one the cursor is in in bold: a project function's own list, or an intrinsic's from the
-language's tables (`s.split(delimiter=" ", maxCount=null)`). The count follows the call's
-own commas, so a call inside an argument does not move it.
+language's tables (`s.split(delimiter=" ", maxCount=null)`). A call may wrap its arguments
+over several lines — the popup reads back to the parenthesis that opened it — and the
+count follows that call's own commas, so a call inside an argument does not move it.
 
 ## Using the Testing panel
 

@@ -171,6 +171,12 @@ function document(text, name = "demo") {
 		},
 		getText: () => value,
 		lineAt: (line) => ({ text: value.split(/\r?\n/)[line] || "" }),
+		offsetAt: (position) => {
+			const lines = value.split(/\r?\n/);
+			let offset = 0;
+			for (let line = 0; line < position.line; line += 1) offset += lines[line].length + 1;
+			return offset + position.character;
+		},
 		set(next) {
 			value = next;
 			this.version += 1;
@@ -409,4 +415,61 @@ test("an argument's own call does not move the outer call's parameter", async ()
 test("no parameters are shown outside a call", async () => {
 	activate();
 	assert.equal(await helpAt(document("print 1"), 0, 7), undefined);
+});
+
+test("a call whose arguments wrap keeps its parameters", async () => {
+	activate();
+	const doc = document(
+		[
+			"box = function(width, height, depth=1)",
+			"\treturn width * height * depth",
+			"end function",
+			"box(1,",
+			"\t2,",
+			"\t",
+		].join("\n")
+	);
+	const help = await helpAt(doc, 5, 1);
+	assert.equal(help.signatures[0].label, "box(width, height, depth=1)");
+	assert.deepEqual(
+		help.signatures[0].parameters.map((parameter) => parameter.label),
+		["width", "height", "depth=1"]
+	);
+	assert.equal(help.activeParameter, 2, "the comma on the line above counts");
+});
+
+test("a wrapped argument's own call does not move the outer parameter", async () => {
+	activate();
+	const doc = document(["print(", "\tabs(-1),", "\t"].join("\n"));
+	const help = await helpAt(doc, 2, 1);
+	assert.ok(help.signatures[0].label.startsWith("print("));
+	assert.equal(help.activeParameter, 1);
+});
+
+test("the call is the innermost one still open, across lines", async () => {
+	activate();
+	const doc = document(
+		[
+			"add = function(a, b=2)",
+			"\treturn a + b",
+			"end function",
+			"add(1)",
+			"// add(2,",
+			"add(",
+			"\t",
+		].join("\n")
+	);
+	const help = await helpAt(doc, 6, 1);
+	assert.equal(help.signatures[0].label, "add(a, b=2)");
+	assert.equal(help.activeParameter, 0);
+});
+
+test("a parenthesis inside a string does not close the call", async () => {
+	activate();
+	const doc = document(
+		["add = function(a, b=2)", "\treturn a", "end function", 'add(")",', "\t"].join("\n")
+	);
+	const help = await helpAt(doc, 4, 1);
+	assert.equal(help.signatures[0].label, "add(a, b=2)");
+	assert.equal(help.activeParameter, 1);
 });

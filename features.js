@@ -476,13 +476,20 @@ async function complete(document, position, index) {
 // The call the cursor is in, read from the text before it: the name in front of the
 // innermost open parenthesis, the receiver when the name is a member of one, and which
 // argument the cursor is in, counted by the commas at that call's own depth.
+//
+// The text runs from the start of the file, not from the start of the line, because an
+// argument list is written wrapped as often as not. Reading forward is what makes that
+// work: a quote and a `//` are opened by what comes before them, and only a forward pass
+// knows which of them is open at the cursor.
 function callAt(text) {
 	const open = [];
 	let quoted = false;
 	for (let i = 0; i < text.length; i += 1) {
 		const ch = text[i];
 		if (quoted) {
-			if (ch === '"') {
+			// A MiniScript string ends with its line, however it was written.
+			if (ch === "\n") quoted = false;
+			else if (ch === '"') {
 				if (text[i + 1] === '"') i += 1;
 				else quoted = false;
 			}
@@ -492,7 +499,13 @@ function callAt(text) {
 			quoted = true;
 			continue;
 		}
-		if (ch === "/" && text[i + 1] === "/") break;
+		if (ch === "/" && text[i + 1] === "/") {
+			// A comment runs to the end of its line, whichever line the cursor is on.
+			const end = text.indexOf("\n", i);
+			if (end < 0) break;
+			i = end;
+			continue;
+		}
 		if (ch === "(" || ch === "[" || ch === "{") {
 			open.push({ bracket: ch, at: i, commas: 0 });
 			continue;
@@ -550,14 +563,15 @@ function signatureOf(symbol, active) {
 // The call's own parameters: a project function's list, or an intrinsic's from the
 // language's tables, found the same way hover and Ctrl-click find the name.
 async function signatureHelp(document, position, index) {
-	const call = callAt(document.lineAt(position.line).text.slice(0, position.character));
+	const text = document.getText();
+	const call = callAt(text.slice(0, document.offsetAt(position)));
 	if (!call) return undefined;
 
 	const matches = await resolve(
 		document,
 		index,
 		index.forDocument(document),
-		importsOf(document.getText()),
+		importsOf(text),
 		{ name: call.name, receiver: call.receiver, line: position.line }
 	);
 	return matches.length ? signatureOf(matches[0].symbol, call.active) : undefined;
