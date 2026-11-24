@@ -15,6 +15,23 @@ test("a member the type does not have is reported on the word", () => {
 	assert.deepEqual([problem.line, problem.character, problem.endCharacter], [1, 8, 13]);
 });
 
+test("a misspelt member carries the repair that replaces it", () => {
+	const [problem] = lint('s = "hi"\nprint s.lengh');
+	assert.deepEqual(problem.fix, {
+		title: "Replace with `len`",
+		line: 1,
+		character: 8,
+		endCharacter: 13,
+		text: "len",
+	});
+});
+
+test("a member with nothing close enough to name offers no fix", () => {
+	const [problem] = lint('s = "hi"\nprint s.zzzzzzz');
+	assert.equal(problem.code, "unknown-member");
+	assert.equal(problem.fix, undefined);
+});
+
 test("a member the type does have is left alone", () => {
 	assert.deepEqual(lint('s = "hi"\nprint s.len\nxs = [1]\nxs.push(2)\nxs.join(",")'), []);
 });
@@ -62,6 +79,31 @@ test("a block that never closes is reported where it opens", () => {
 	assert.equal(found[0].severity, "error");
 	assert.equal(found[0].message, "`if` is never closed. Add `end if`.");
 	assert.deepEqual([found[0].line, found[0].character, found[0].endCharacter], [0, 0, 2]);
+});
+
+test("an unclosed block carries the end that closes it", () => {
+	const [problem] = lint(["f = function(a)", "\treturn a"].join("\n"));
+	assert.equal(problem.code, "unclosed-block");
+	assert.deepEqual(problem.fix, {
+		title: "Insert `end function`",
+		line: 1,
+		character: 9,
+		endCharacter: 9,
+		text: "\nend function",
+	});
+});
+
+test("the fix for a block still holding another brings both ends", () => {
+	const [outer, inner] = lint(["if a then", "\tfor x", "\t\tprint x"].join("\n"));
+	assert.equal(outer.fix.title, "Insert `end if`");
+	assert.equal(outer.fix.text, "\n\tend for\nend if");
+	assert.equal(inner.fix.text, "\n\tend for");
+});
+
+test("a block left open before an end is inserted above it", () => {
+	const [problem] = lint(["if a then", "\tfor x", "\t\tprint x", "\tend if"].join("\n"));
+	assert.equal(problem.fix.title, "Insert `end for`");
+	assert.deepEqual([problem.fix.line, problem.fix.character, problem.fix.text], [3, 0, "\tend for\n"]);
 });
 
 test("each kind of block is closed by its own end", () => {

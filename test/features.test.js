@@ -15,10 +15,11 @@ function disposable() {
 
 const opened = {
 	collection: undefined,
-	hover: undefined,
-	definition: undefined,
-	outline: undefined,
-	completion: undefined,
+			hover: undefined,
+		definition: undefined,
+		outline: undefined,
+		actions: undefined,
+		completion: undefined,
 	signature: undefined,
 	triggers: {},
 	events: {},
@@ -36,6 +37,22 @@ const vscode = {
 	Diagnostic: class {
 		constructor(range, message, severity) {
 			Object.assign(this, { range, message, severity });
+		}
+	},
+	CodeActionKind: { QuickFix: "quickfix" },
+	CodeAction: class {
+		constructor(title, kind) {
+			Object.assign(this, { title, kind });
+			this.edit = undefined;
+			this.diagnostics = [];
+		}
+	},
+	WorkspaceEdit: class {
+		constructor() {
+			this.edits = [];
+		}
+		replace(uri, range, text) {
+			this.edits.push({ uri, range, text });
 		}
 	},
 	Range: class {
@@ -137,6 +154,10 @@ const vscode = {
 			opened.triggers.signature = triggers;
 			return disposable();
 		},
+		registerCodeActionsProvider: (selector, provider) => {
+			opened.actions = provider;
+			return disposable();
+		},
 	},
 	workspace: {
 		workspaceFolders: [{ uri: { fsPath: "/work" } }],
@@ -165,6 +186,7 @@ Module._load = function (request, ...rest) {
 };
 
 const features = require("../features.js");
+const { lint } = require("../lint.js");
 
 function activate() {
 	opened.events = {};
@@ -319,6 +341,21 @@ function completionAt(doc, line, character) {
 
 function helpAt(doc, line, character) {
 	return opened.signature.provideSignatureHelp(doc, { line, character });
+}
+
+// The text a code action would leave behind, applied by hand: the edit replaces one range
+// with its text, which is all any of these actions do.
+function applyFix(doc, action) {
+	const [edit] = action.edit.edits;
+	const lines = doc.getText().split(/\r?\n/);
+	const line = lines[edit.range.start.line];
+	lines[edit.range.start.line] =
+		line.slice(0, edit.range.start.character) + edit.text + line.slice(edit.range.end.character);
+	return lines.join("\n");
+}
+
+function actionsFor(doc, found) {
+	return opened.actions.provideCodeActions(doc, found.range, { diagnostics: [found] });
 }
 
 test("completion offers the names in scope, the enclosing function's own first", async () => {
@@ -603,4 +640,81 @@ test("a markdown cell is left alone", async () => {
 	await opened.events.onDidOpenTextDocument(doc);
 
 	assert.equal(collection.entries.has(doc.uri.toString()), false);
+});
+
+// Each repair is checked by applying it: the text an action leaves behind must lint clean.
+test("a misspelt member's squiggle offers its suggestion", async () => {
+	const collection = activate();
+	const doc = document('s = "hi"\nprint s.lengh');
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const found = published(collection, doc).find((problem) => problem.code === "unknown-member");
+	const [action] = await actionsFor(doc, found);
+	assert.equal(action.title, "Replace with `len`");
+	assert.equal(action.kind, vscode.CodeActionKind.QuickFix);
+	assert.equal(action.isPreferred, true);
+	assert.deepEqual(action.diagnostics, [found]);
+
+	const [edit] = action.edit.edits;
+	assert.deepEqual(edit.range.start, { line: 1, character: 8 });
+	assert.deepEqual(edit.range.end, { line: 1, character: 13 });
+	assert.equal(edit.text, "len");
+
+	const fixed = applyFix(doc, action);
+	assert.equal(fixed, 's = "hi"\nprint s.len');
+	assert.deepEqual(lint(fixed), []);
+});
+
+test("an unclosed block offers to insert its end", async () => {
+	const collection = activate();
+	const doc = document(["f = function(a)", "\treturn a"].join("\n"));
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const found = published(collection, doc).find((problem) => problem.code === "unclosed-block");
+	const [action] = await actionsFor(doc, found);
+	assert.equal(action.title, "Insert `end function`");
+
+	const fixed = applyFix(doc, action);
+	assert.equal(fixed, "f = function(a)\n\treturn a\nend function");
+	assert.deepEqual(lint(fixed), []);
+});
+
+test("a block left open inside another is closed above the outer end", async () => {
+	const collection = activate();
+	const doc = document(["if a then", "\tfor x", "\t\tprint x", "\tend if"].join("\n"));
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const found = published(collection, doc).find((problem) => problem.code === "unclosed-block");
+	const [action] = await actionsFor(doc, found);
+	assert.equal(action.title, "Insert `end for`");
+
+	const fixed = applyFix(doc, action);
+	assert.equal(fixed, ["if a then", "\tfor x", "\t\tprint x", "\tend for", "\tend if"].join("\n"));
+	assert.deepEqual(lint(fixed), []);
+});
+
+test("the fix for an outer block brings the ends still open inside it", async () => {
+	const collection = activate();
+	const doc = document(["if a then", "\tfor x", "\t\tprint x"].join("\n"));
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const broken = published(collection, doc);
+	assert.deepEqual(broken.map((problem) => problem.code), ["unclosed-block", "unclosed-block"]);
+	const outer = broken.find((problem) => problem.message.startsWith("`if`"));
+	const [action] = await actionsFor(doc, outer);
+	assert.equal(action.title, "Insert `end if`");
+
+	const fixed = applyFix(doc, action);
+	assert.equal(fixed, ["if a then", "\tfor x", "\t\tprint x", "\tend for", "end if"].join("\n"));
+	assert.deepEqual(lint(fixed), []);
+});
+
+test("a problem with no certain repair offers no fix", async () => {
+	const collection = activate();
+	const doc = document("end");
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const [found] = published(collection, doc);
+	assert.equal(found.code, "stray-end");
+	assert.deepEqual(await actionsFor(doc, found), []);
 });

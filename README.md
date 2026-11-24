@@ -175,6 +175,13 @@ Three problems are marked as you type, without starting the interpreter:
   With no workspace folder to search, imports are not judged at all, so a scratch file is
   never told its imports are missing.
 
+Two of these can be repaired from the squiggle itself. A misspelt member offers the name it
+probably meant — **Replace with `len`** — and an unclosed block offers to insert the `end`
+it is missing, above the `end` that closed an enclosing block or at the end of the file, at
+the block's own indentation; a block still holding another brings the ends for both. The
+import warning has no such fix, since whether to create the module or correct the path is
+not something a scan can know.
+
 Nothing is run and nothing is written: the same text scan behind the tooltips and the
 Outline answers these, so a file the interpreter could not start is still read. The
 squiggles follow your edits, refreshed shortly after typing stops.

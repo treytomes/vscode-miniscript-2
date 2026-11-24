@@ -3,7 +3,10 @@
 // `vscode`, so each check is a plain function the tests call; features.js turns these
 // records into a DiagnosticCollection.
 //
-// A record is { line, character, endCharacter, severity, code, message }, all on one line.
+// A record is { line, character, endCharacter, severity, code, message }, all on one line,
+// and a `fix` when there is one repair the author certainly meant: { title, line,
+// character, endCharacter, text }, a replacement of that range with that text. An insertion
+// has endCharacter equal to character.
 //
 // The severity follows what the interpreter does with the file. A block that never closes
 // does not compile, so it is an error. A member no type has and an import the workspace
@@ -96,16 +99,24 @@ function memberProblems(text, symbols) {
 			if (builtins.member(member.value, type).length) continue;
 
 			const near = closest(member.value, builtins.membersOf(type));
-			found.push(
-				problem(
-					member,
-					near
-						? `\`${type}\` has no member \`${member.value}\`. Did you mean \`${near}\`?`
-						: `\`${type}\` has no member \`${member.value}\`.`,
-					"warning",
-					"unknown-member"
-				)
+			const record = problem(
+				member,
+				near
+					? `\`${type}\` has no member \`${member.value}\`. Did you mean \`${near}\`?`
+					: `\`${type}\` has no member \`${member.value}\`.`,
+				"warning",
+				"unknown-member"
 			);
+			if (near) {
+				record.fix = {
+					title: `Replace with \`${near}\``,
+					line: member.line,
+					character: member.start,
+					endCharacter: member.end,
+					text: near,
+				};
+			}
+			found.push(record);
 		}
 	}
 	return found;
@@ -117,9 +128,35 @@ function memberProblems(text, symbols) {
 function blockProblems(text) {
 	const found = [];
 	const open = [];
+	const lines = String(text).split(/\r?\n/);
 
-	const unclosed = (block, closedBy) =>
-		problem(
+	// The indentation a block's own `end` belongs at: the whitespace that starts its
+	// statement, which for `f = function` is not where the `function` token stands.
+	const indentOf = (block) => (/^[ \t]*/.exec(lines[block.token.line] || "") || [""])[0];
+
+	// The ends still owed to `block` and to everything still open inside it, innermost
+	// first, each at its own block's indentation. A fix carrying the whole tail compiles
+	// whichever of the diagnostics the author chooses to repair.
+	const endsDownTo = (group, block) => {
+		const index = group.indexOf(block);
+		return group
+			.slice(index + 1)
+			.concat([block])
+			.map((each) => `${indentOf(each)}end ${each.kind}`);
+	};
+
+	const unclosed = (block, group, closedBy) => {
+		const ends = endsDownTo(group, block);
+		const last = lines.length - 1;
+		// Before the `end` that closed an enclosing block, the missing ones go above it, at
+		// the start of its line; at the end of the file they go below it, after a newline
+		// unless the file already ends with one.
+		const at = closedBy
+			? { line: closedBy.line, character: 0, text: `${ends.join("\n")}\n` }
+			: lines[last] === ""
+				? { line: last, character: 0, text: ends.join("\n") }
+				: { line: last, character: lines[last].length, text: `\n${ends.join("\n")}` };
+		const record = problem(
 			block.token,
 			closedBy
 				? `\`${block.kind}\` is never closed. Add \`end ${block.kind}\` before the ` +
@@ -128,6 +165,15 @@ function blockProblems(text) {
 			"error",
 			"unclosed-block"
 		);
+		record.fix = {
+			title: `Insert \`end ${block.kind}\``,
+			line: at.line,
+			character: at.character,
+			endCharacter: at.character,
+			text: at.text,
+		};
+		return record;
+	};
 
 	// One `end`, wherever it stands in the file: it closes the innermost block of its own
 	// kind, or says why it cannot.
@@ -164,8 +210,9 @@ function blockProblems(text) {
 		}
 
 		// Anything still open inside the block this `end` closes is missing its own.
-		for (const inner of open.splice(index + 1)) {
-			found.push(unclosed(inner, { kind: named || open[index].kind, line: token.line }));
+		const tail = open.splice(index + 1);
+		for (const inner of tail) {
+			found.push(unclosed(inner, tail, { kind: named || open[index].kind, line: token.line }));
 		}
 		open.length = index;
 	};
@@ -214,7 +261,7 @@ function blockProblems(text) {
 		}
 	}
 
-	for (const block of open) found.push(unclosed(block));
+	for (const block of open) found.push(unclosed(block, open));
 	return found;
 }
 

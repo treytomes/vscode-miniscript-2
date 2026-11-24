@@ -1,8 +1,9 @@
 // features.js — the VS Code side of symbols.js: the hover tooltip, Go to Definition
 // (Ctrl-click), the Outline view, completion, the parameters of the call being written,
-// and the squiggles lint.js finds shown in a DiagnosticCollection. The scan is in
-// symbols.js, the language's own intrinsics in builtins.js, so this file only turns those
-// records into what the providers return.
+// and the squiggles lint.js finds shown in a DiagnosticCollection, with the quick fix for
+// each one that has a certain repair. The scan is in symbols.js, the language's own
+// intrinsics in builtins.js, so this file only turns those records into what the providers
+// return.
 
 const fs = require("fs");
 const path = require("path");
@@ -177,7 +178,40 @@ function toDiagnostic(found) {
 	);
 	diagnostic.code = found.code;
 	diagnostic.source = "miniscript2";
+	// The repair travels on the diagnostic, so the action cannot drift from the problem.
+	if (found.fix) diagnostic.data = found.fix;
 	return diagnostic;
+}
+
+// What a squiggle can be repaired by, when lint.js was sure enough to say: the edit it
+// described, applied to the range it marked. A replacement and an insertion are the same
+// edit, so one shape covers both.
+function quickFix(document, diagnostic) {
+	const fix = diagnostic.data;
+	if (!fix) return undefined;
+	const action = new vscode.CodeAction(fix.title, vscode.CodeActionKind.QuickFix);
+	const edit = new vscode.WorkspaceEdit();
+	edit.replace(
+		document.uri,
+		new vscode.Range(fix.line, fix.character, fix.line, fix.endCharacter),
+		fix.text
+	);
+	action.edit = edit;
+	action.diagnostics = [diagnostic];
+	action.isPreferred = true;
+	return action;
+}
+
+// Only the squiggles the editor is asking about are offered a repair; a problem with no
+// certain one - a stray `end`, an import that names no file - is left as it is.
+function codeActions(document, context) {
+	const actions = [];
+	for (const diagnostic of context?.diagnostics || []) {
+		if (diagnostic.source !== "miniscript2") continue;
+		const action = quickFix(document, diagnostic);
+		if (action) actions.push(action);
+	}
+	return actions;
 }
 
 function nameRange(symbol) {
@@ -677,6 +711,11 @@ function register(context) {
 			{ provideSignatureHelp: (document, position) => signatureHelp(document, position, index) },
 			"(",
 			","
+		),
+		vscode.languages.registerCodeActionsProvider(
+			SELECTOR,
+			{ provideCodeActions: (document, range, context) => codeActions(document, context) },
+			{ providedCodeActionKinds: [vscode.CodeActionKind.QuickFix] }
 		),
 		vscode.workspace.onDidChangeTextDocument((event) => index.forget(event.document.uri)),
 		vscode.workspace.onDidSaveTextDocument(() => index.forgetWorkspace()),
