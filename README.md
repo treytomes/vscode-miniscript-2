@@ -199,10 +199,14 @@ Three problems are marked as you type, without starting the interpreter:
 
 - **A member the type does not have.** `s = "hi"` makes `s.lengh` a warning, and hovering
   it says what was probably meant: *`string` has no member `lengh`. Did you mean `len`?*
-  Only a receiver whose type the file can prove — a string or a list — is judged, and
-  `m.anything` is never reported, since every key of a map is a member. An instance `new`
-  made is a map too, so `sq.degrees` after `sq = new Shape` is never called wrong, however
-  the class was made. A file that adds a member to a type (`string.shout = function`) turns
+  Only a receiver whose type the file can prove — a string, a list, or an instance of a
+  class this file declares and gave methods — is judged, and `m.anything` is never
+  reported, since every key of a map is a member. So `sq.degrez(2)` after
+  `sq = new Shape` is a warning against `Shape`, with the method it probably meant; but
+  nothing the program gives itself is: `sq.extra = 1`, a field a constructor sets
+  (`self.label = "x"`), a literal's keys, and `Shape["n="]` are all left alone, and so is
+  a class that takes a computed key (`Shape[key] = ...`) or whose other methods live in
+  another module. A file that adds a member to a type (`string.shout = function`) turns
   the check off for that type. The
   interpreter only finds the mistake when the line runs (`Key Not Found`), which is why it
   is a warning rather than an error.

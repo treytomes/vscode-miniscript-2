@@ -14,7 +14,7 @@
 // runs, and a module can sit on the project's own import path, outside the workspace.
 
 const builtins = require("./builtins");
-const { SCOPES, scan, statements, typeOf } = require("./symbols");
+const { SCOPES, scan, statements, typeOf, classOf } = require("./symbols");
 
 // Only the types whose members are certainly the language's own are judged. A map is left
 // out because every key of one is a member the scan cannot see, and an error value because
@@ -67,6 +67,51 @@ function closest(name, candidates) {
 	return best;
 }
 
+// The names a map literal spells as keys, `{"sides": 4}` and `{sides: 4}` alike: a key is
+// reachable through a dot, so it is a member the program gives itself.
+function literalKeys(tokens) {
+	const keys = new Set();
+	let depth = 0;
+	for (let i = 0; i < tokens.length; i += 1) {
+		const token = tokens[i];
+		if (token.type === "punct" && token.value === "{") {
+			depth += 1;
+			continue;
+		}
+		if (token.type === "punct" && token.value === "}") {
+			depth = Math.max(0, depth - 1);
+			continue;
+		}
+		if (!depth) continue;
+		const next = tokens[i + 1];
+		if (!next || next.type !== "punct" || next.value !== ":") continue;
+		if (token.type === "string" || token.type === "word") keys.add(token.value);
+	}
+	return keys;
+}
+
+// The record for a member the type does not have, with the repair when one is close enough.
+function memberProblem(member, owner, near) {
+	const record = problem(
+		member,
+		near
+			? `\`${owner}\` has no member \`${member.value}\`. Did you mean \`${near}\`?`
+			: `\`${owner}\` has no member \`${member.value}\`.`,
+		"warning",
+		"unknown-member"
+	);
+	if (near) {
+		record.fix = {
+			title: `Replace with \`${near}\``,
+			line: member.line,
+			character: member.start,
+			endCharacter: member.end,
+			text: near,
+		};
+	}
+	return record;
+}
+
 // `receiver.member` where the receiver's type is one the intrinsic table lists: the member
 // has to be one of that type's, since nothing else can be reached through a string or a
 // list. A program that adds a member to the type turns the check off for the whole file.
@@ -83,6 +128,52 @@ function memberProblems(text, symbols) {
 		if (type) extended.add(type);
 	}
 
+	// Every name the program gives a map itself: `sq.extra = 1`, `self.label = "x"`, a
+	// literal's keys and `Shape["n="]`. None of them is a misspelling, whichever map it
+	// lands on. A computed key, `Shape[key] = ...`, can name any member at all, so the map
+	// that takes one is not judged.
+	const assigned = new Set();
+	const computed = new Set();
+	const declared = new Set();
+	for (const symbol of symbols) {
+		if (symbol.kind === "class" && !symbol.receiver) declared.add(symbol.name);
+	}
+	for (const statement of statements(text)) {
+		const tokens = statement.tokens;
+		for (let i = 0; i + 1 < tokens.length; i += 1) {
+			const token = tokens[i];
+			const before = tokens[i - 1];
+			const after = tokens[i + 1];
+			if (
+				token.type === "word" &&
+				before &&
+				before.type === "punct" &&
+				before.value === "." &&
+				after.type === "punct" &&
+				after.value === "="
+			) {
+				assigned.add(token.value);
+			}
+			if (token.type !== "word" || !after || after.value !== "[") continue;
+			let depth = 0;
+			for (let j = i + 1; j < tokens.length; j += 1) {
+				if (tokens[j].value === "[") depth += 1;
+				else if (tokens[j].value !== "]") continue;
+				else if ((depth -= 1)) continue;
+				else {
+					const following = tokens[j + 1];
+					if (following && following.type === "punct" && following.value === "=") {
+						const inner = tokens.slice(i + 2, j);
+						if (inner.length === 1 && inner[0].type === "string") assigned.add(inner[0].value);
+						else computed.add(token.value);
+					}
+					break;
+				}
+			}
+		}
+		for (const key of literalKeys(tokens)) assigned.add(key);
+	}
+
 	for (const statement of statements(text)) {
 		const tokens = statement.tokens;
 		for (let i = 0; i + 2 < tokens.length; i += 1) {
@@ -94,29 +185,38 @@ function memberProblems(text, symbols) {
 			// These name a map the scan cannot see into, not a value with a type.
 			if (receiver.value === "globals" || SCOPES.has(receiver.value)) continue;
 
+			// `sq = new Shape` makes `sq` an instance of a class this file defines: the
+			// members it has are that class's methods, the map's own, and any key the program
+			// assigns. Only a name outside all three is a misspelling.
+			const made = classOf(symbols, { name: receiver.value, line: receiver.line });
+			if (
+				made &&
+				declared.has(made) &&
+				!computed.has(made) &&
+				!computed.has(receiver.value)
+			) {
+				const methods = symbols.filter(
+					(symbol) => symbol.kind === "method" && symbol.receiver === made
+				);
+				const named = methods.map((symbol) => symbol.name);
+				if (
+					named.length &&
+					!named.includes(member.value) &&
+					!assigned.has(member.value) &&
+					!builtins.member(member.value, "map").length
+				) {
+					found.push(memberProblem(member, made, closest(member.value, named)));
+				}
+				continue;
+			}
+
 			const type = typeOf(symbols, { name: receiver.value, line: receiver.line });
 			if (!CHECKED_TYPES.has(type) || extended.has(type)) continue;
 			if (builtins.member(member.value, type).length) continue;
 
-			const near = closest(member.value, builtins.membersOf(type));
-			const record = problem(
-				member,
-				near
-					? `\`${type}\` has no member \`${member.value}\`. Did you mean \`${near}\`?`
-					: `\`${type}\` has no member \`${member.value}\`.`,
-				"warning",
-				"unknown-member"
+			found.push(
+				memberProblem(member, type, closest(member.value, builtins.membersOf(type)))
 			);
-			if (near) {
-				record.fix = {
-					title: `Replace with \`${near}\``,
-					line: member.line,
-					character: member.start,
-					endCharacter: member.end,
-					text: near,
-				};
-			}
-			found.push(record);
 		}
 	}
 	return found;

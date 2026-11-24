@@ -63,6 +63,97 @@ test("an instance of a class this file cannot see is not judged either", () => {
 	assert.deepEqual(lint(text), []);
 });
 
+test("a misspelt method on an instance is reported against its class", () => {
+	const text = [
+		'Shape = {"sides": 4}',
+		"Shape.degrees = function(times=1)",
+		"\treturn times * 45",
+		"end function",
+		"sq = new Shape",
+		"print sq.degrez(2)",
+	].join("\n");
+
+	const found = lint(text);
+	assert.equal(found.length, 1);
+	const [problem] = found;
+	assert.equal(problem.code, "unknown-member");
+	assert.equal(problem.message, "`Shape` has no member `degrez`. Did you mean `degrees`?");
+	assert.deepEqual([problem.line, problem.character, problem.endCharacter], [5, 9, 15]);
+	assert.deepEqual(problem.fix, {
+		title: "Replace with `degrees`",
+		line: 5,
+		character: 9,
+		endCharacter: 15,
+		text: "degrees",
+	});
+});
+
+test("an instance's method, key and map member are not misspellings", () => {
+	const text = [
+		'Shape = {"sides": 4}',
+		"Shape.new = function",
+		'\tself.label = "square"',
+		"end function",
+		"Shape.degrees = function(times=1)",
+		"\treturn times * 45",
+		"end function",
+		"sq = new Shape",
+		"sq.extra = 1",
+		"print sq.degrees(2)",
+		"print sq.sides",
+		"print sq.label",
+		"print sq.extra",
+		"print sq.len",
+		"print sq.indexes",
+	].join("\n");
+
+	assert.deepEqual(lint(text), []);
+});
+
+test("a misspelt method with nothing close enough to name offers no fix", () => {
+	const text = [
+		"Shape = {}",
+		"Shape.degrees = function",
+		"\treturn 1",
+		"end function",
+		"sq = new Shape",
+		"print sq.zzzzzzz",
+	].join("\n");
+
+	const [problem] = lint(text);
+	assert.equal(problem.message, "`Shape` has no member `zzzzzzz`.");
+	assert.equal(problem.fix, undefined);
+});
+
+test("a class the file gave no methods has nothing to be wrong about", () => {
+	const text = ['Shape = {"sides": 4}', "sq = new Shape", "print sq.anything"].join("\n");
+	assert.deepEqual(lint(text), []);
+});
+
+test("a class with a computed key, or one from another file, is not judged", () => {
+	const computed = [
+		"Shape = {}",
+		"Shape.go = function",
+		"\treturn 1",
+		"end function",
+		'key = "degrees"',
+		"Shape[key] = 2",
+		"sq = new Shape",
+		"print sq.degrees",
+	].join("\n");
+	assert.deepEqual(lint(computed), [], "a computed key can name any member");
+
+	const imported = [
+		'import "shapes"',
+		"Shape.go = function",
+		"\treturn 1",
+		"end function",
+		"sq = new Shape",
+		"print sq.degrees",
+	].join("\n");
+	assert.deepEqual(lint(imported), [], "the class's other methods may be in the module");
+});
+
 test("a receiver with no one type is not judged", () => {
 	assert.deepEqual(lint('x = 1\nx = "one"\nprint x.lengh'), []);
 	assert.deepEqual(lint("f = function(value)\n\treturn value.lengh\nend function"), []);
