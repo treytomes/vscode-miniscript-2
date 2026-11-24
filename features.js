@@ -144,6 +144,7 @@ function createIndex() {
 	const files = new Map();
 	const modules = new Map();
 	const searches = new Map();
+	let listing;
 
 	function forDocument(document) {
 		const seen = documents.get(document);
@@ -153,18 +154,41 @@ function createIndex() {
 		return found;
 	}
 
-	async function forUri(uri) {
+	// A document the editor has open is read as it stands, unsaved edits included; a file it
+	// has not opened is read from disk once and remembered.
+	function editing(uri) {
+		const key = uri.toString();
+		return (vscode.workspace.textDocuments || []).find(
+			(document) => document.uri.toString() === key
+		);
+	}
+
+	async function sourceOf(uri) {
+		const open = editing(uri);
+		if (open) return { text: open.getText(), symbols: forDocument(open) };
 		const key = uri.toString();
 		if (files.has(key)) return files.get(key);
-		let found = [];
+		let text = "";
 		try {
 			const bytes = await vscode.workspace.fs.readFile(uri);
-			found = scan(Buffer.from(bytes).toString("utf8"));
+			text = Buffer.from(bytes).toString("utf8");
 		} catch {
 			// A file that cannot be read has no definitions; remember that and move on.
 		}
+		const found = { text, symbols: scan(text) };
 		files.set(key, found);
 		return found;
+	}
+
+	async function forUri(uri) {
+		return (await sourceOf(uri)).symbols;
+	}
+
+	// Every `.ms` file in the workspace, asked for once and remembered until a save or a
+	// file added or removed says the list may have changed.
+	function workspaceUris() {
+		if (!listing) listing = vscode.workspace.findFiles("**/*.ms", "**/node_modules/**", 500);
+		return listing;
 	}
 
 	async function moduleUri(target) {
@@ -177,6 +201,33 @@ function createIndex() {
 		const uri = matches.length ? matches[0] : undefined;
 		modules.set(target, uri);
 		return uri;
+	}
+
+	// The file an import names: a module looked up by name for `"lib"`, and for a path
+	// (`"../src/triples"`) the workspace file that path resolves to beside the importing
+	// file, which is how the interpreter reads one.
+	async function target(fromUri, spec) {
+		if (!spec.startsWith(".")) return moduleUri(spec);
+		const folder = fromUri && fromUri.scheme === "file" ? path.dirname(fromUri.fsPath) : undefined;
+		if (!folder) return undefined;
+		const file = path.resolve(folder, `${spec}.ms`);
+		const uris = await workspaceUris();
+		return uris.find((uri) => path.resolve(uri.fsPath) === file);
+	}
+
+	// Every file in the workspace that imports the one at `uri`, with the alias its import
+	// gave the module, so the module's own name can be found where those files write it.
+	async function importersOf(uri) {
+		const importers = [];
+		for (const other of await workspaceUris()) {
+			if (other.fsPath === uri.fsPath) continue;
+			const source = await sourceOf(other);
+			for (const [alias, spec] of importsOf(source.text)) {
+				const found = await target(other, spec);
+				if (found && found.fsPath === uri.fsPath) importers.push({ uri: other, alias, source });
+			}
+		}
+		return importers;
 	}
 
 	async function search(name, receiver, skip) {
@@ -208,9 +259,20 @@ function createIndex() {
 		files.clear();
 		modules.clear();
 		searches.clear();
+		listing = undefined;
 	}
 
-	return { forDocument, forUri, moduleUri, search, forget, forgetWorkspace };
+	return {
+		forDocument,
+		forUri,
+		sourceOf,
+		moduleUri,
+		target,
+		importersOf,
+		search,
+		forget,
+		forgetWorkspace,
+	};
 }
 
 function moduleSymbol(name, target) {
@@ -472,8 +534,8 @@ function outline(document, index) {
 // Every place in the file a symbol is written: its own name where it is declared, when the
 // editor asked for that, and every use the scan reads as the same symbol - a member only
 // through the receiver the file gave it, so `x` in one function is not `x` in another.
-function rangesOf(document, symbols, target, includeDeclaration) {
-	const lines = document.getText().split(/\r?\n/);
+function rangesForText(text, symbols, target, includeDeclaration) {
+	const lines = text.split(/\r?\n/);
 	const ranges = [];
 	for (let line = 0; line < lines.length; line += 1) {
 		const tokens = tokenize(lines[line], line);
@@ -493,6 +555,29 @@ function rangesOf(document, symbols, target, includeDeclaration) {
 	return ranges;
 }
 
+function rangesOf(document, symbols, target, includeDeclaration) {
+	return rangesForText(document.getText(), symbols, target, includeDeclaration);
+}
+
+// Every `alias.name` in a file: the only way a file that imports a module writes one of
+// the module's own names, and never a bare local that happens to be spelled the same.
+function memberRanges(text, alias, name) {
+	const ranges = [];
+	const lines = text.split(/\r?\n/);
+	for (let line = 0; line < lines.length; line += 1) {
+		const tokens = tokenize(lines[line], line);
+		for (let i = 2; i < tokens.length; i += 1) {
+			const token = tokens[i];
+			if (token.type !== "word" || token.value !== name) continue;
+			const dot = tokens[i - 1];
+			const receiver = tokens[i - 2];
+			if (dot.value !== "." || receiver.type !== "word" || receiver.value !== alias) continue;
+			ranges.push(new vscode.Range(line, token.start, line, token.end));
+		}
+	}
+	return ranges;
+}
+
 // Whether `receiver.name` is this method: the receiver it was defined on, `self` and
 // `super` inside that class, or an instance `new` made from it.
 function memberOf(symbols, tokens, index, line, target) {
@@ -503,59 +588,166 @@ function memberOf(symbols, tokens, index, line, target) {
 	return methodAt(symbols, receiver.value, target.name, line) === target;
 }
 
-// Every place the name under the cursor is written in this file. A name the file does not
-// define has no references here; the workspace's own would need every file read.
-function references(document, position, index, includeDeclaration) {
+// The name a module offers the files that import it: a top-level name, not a local and not
+// a member of a class.
+function exported(symbols, name) {
+	return symbols.find(
+		(symbol) => symbol.name === name && !symbol.container && !symbol.receiver
+	);
+}
+
+function workspace() {
+	return (vscode.workspace.workspaceFolders || []).length > 0;
+}
+
+// The files that import a module, with the one being edited counted once and read from the
+// editor rather than from disk, since its unsaved import is the one the cursor is in.
+async function importersFor(index, moduleUri, current) {
+	const importers = await index.importersOf(moduleUri);
+	const seen = new Set(importers.map((importer) => importer.uri.fsPath));
+	if (current && !seen.has(current.document.uri.fsPath)) {
+		importers.push({
+			uri: current.document.uri,
+			alias: current.alias,
+			source: { text: current.document.getText() },
+		});
+	}
+	return importers;
+}
+
+// Every place an imported name is written: in the module that defines it, its declaration
+// and its bare uses, and in each file that imports it, as `alias.name`.
+function moduleRanges(module, symbol, includeDeclaration, importers) {
+	const found = rangesForText(module.text, module.symbols, symbol, includeDeclaration).map(
+		(range) => ({ uri: module.uri, range })
+	);
+	for (const importer of importers) {
+		for (const range of memberRanges(importer.source.text, importer.alias, symbol.name)) {
+			found.push({ uri: importer.uri, range });
+		}
+	}
+	return found;
+}
+
+// Every place the name under the cursor is written. A local or a parameter is this file's
+// own, but a name an import brings in is the module's: finding it follows the name into the
+// file that defines it and into every file that imports it.
+async function references(document, position, index, includeDeclaration) {
 	const text = document.getText();
 	if (inLiteral(text, position.line, position.character)) return [];
 	const range = document.getWordRangeAtPosition(position, WORD);
 	if (!range) return [];
 	const name = document.getText(range);
 	if (KEYWORDS.has(name)) return [];
+
 	const symbols = index.forDocument(document);
 	const receiver = receiverOf(document, position, range);
-	const target =
-		receiver === undefined
-			? locate(symbols, { name, line: position.line })
-			: methodAt(symbols, receiver, name, position.line);
+	const local = (target) =>
+		rangesOf(document, symbols, target, includeDeclaration).map(
+			(found) => ({ uri: document.uri, range: found })
+		);
+
+	// `lib.name`: the module's own name when `lib` is what `import "lib"` made, or a
+	// method of a receiver this file gave.
+	if (receiver !== undefined) {
+		const member = methodAt(symbols, receiver, name, position.line);
+		if (member) return local(member).map(({ uri, range }) => new vscode.Location(uri, range));
+		const imports = importsOf(text);
+		if (!workspace() || !imports.has(receiver)) return [];
+		const uri = await index.target(document.uri, imports.get(receiver));
+		const source = uri && (await index.sourceOf(uri));
+		const symbol = source && exported(source.symbols, name);
+		if (!symbol) return [];
+		const importers = await importersFor(index, uri, { document, alias: receiver });
+		return moduleRanges({ uri, ...source }, symbol, includeDeclaration, importers).map(
+			(found) => new vscode.Location(found.uri, found.range)
+		);
+	}
+
+	const target = locate(symbols, { name, line: position.line });
 	if (!target) return [];
-	return rangesOf(document, symbols, target, includeDeclaration).map(
-		(found) => new vscode.Location(document.uri, found)
-	);
+	// A member reached without a dot (`self.sides` is written with one) and a local are the
+	// file's own; a name at the top level can be reached through an import.
+	if (target.container || target.receiver || !workspace()) {
+		return local(target).map(({ uri, range }) => new vscode.Location(uri, range));
+	}
+	const importers = await importersFor(index, document.uri);
+	return moduleRanges(
+		{ uri: document.uri, text, symbols },
+		target,
+		includeDeclaration,
+		importers
+	).map((found) => new vscode.Location(found.uri, found.range));
 }
 
-// A rename is offered for a local or a parameter, and for nothing else: a top-level name
-// can be used from files this file has not read, and rewriting only the ones it can see
-// would be a quiet mistake.
-function localAt(document, position, index) {
+// What the cursor names and whether renaming it is safe: a local or a parameter, which only
+// this file can see, or a name a module offers - `lib.name` here, or the module's own
+// top-level name where it is defined - whose every importer's `alias.name` is a use of it.
+// A top-level name nothing in the workspace imports is still refused, since a file outside
+// it could be one of its readers.
+async function renameAt(document, position, index) {
 	const text = document.getText();
 	if (inLiteral(text, position.line, position.character)) return undefined;
 	const range = document.getWordRangeAtPosition(position, WORD);
 	if (!range) return undefined;
 	const name = document.getText(range);
+	if (KEYWORDS.has(name)) return undefined;
+
 	const symbols = index.forDocument(document);
 	const receiver = receiverOf(document, position, range);
-	const target =
-		receiver === undefined
-			? locate(symbols, { name, line: position.line })
-			: methodAt(symbols, receiver, name, position.line);
-	if (!target || !target.container) return undefined;
-	return { name, range, symbols, target };
-}
+	const imports = importsOf(text);
 
-function prepareRename(document, position, index) {
-	const local = localAt(document, position, index);
-	return local ? { range: local.range, placeholder: local.name } : undefined;
-}
-
-function rename(document, position, newName, index) {
-	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return undefined;
-	const local = localAt(document, position, index);
-	if (!local) return undefined;
-	const edit = new vscode.WorkspaceEdit();
-	for (const found of rangesOf(document, local.symbols, local.target, true)) {
-		edit.replace(document.uri, found, newName);
+	if (receiver === undefined) {
+		const symbol = locate(symbols, { name, line: position.line });
+		if (!symbol) return undefined;
+		if (symbol.container) return { name, range, symbol, imported: false };
+		if (symbol.receiver || !workspace()) return undefined;
+		const importers = await importersFor(index, document.uri);
+		if (!importers.length) return undefined;
+		return {
+			name,
+			range,
+			symbol,
+			imported: true,
+			module: { uri: document.uri, text, symbols },
+			importers,
+		};
 	}
+
+	const member = methodAt(symbols, receiver, name, position.line);
+	if (member && member.container) return { name, range, symbol: member, imported: false };
+	if (!workspace() || !imports.has(receiver)) return undefined;
+	const uri = await index.target(document.uri, imports.get(receiver));
+	const source = uri && (await index.sourceOf(uri));
+	const symbol = source && exported(source.symbols, name);
+	if (!symbol) return undefined;
+	return {
+		name,
+		range,
+		symbol,
+		imported: true,
+		module: { uri, ...source },
+		importers: await importersFor(index, uri, { document, alias: receiver }),
+	};
+}
+
+async function prepareRename(document, position, index) {
+	const target = await renameAt(document, position, index);
+	return target ? { range: target.range, placeholder: target.name } : undefined;
+}
+
+async function rename(document, position, newName, index) {
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return undefined;
+	const target = await renameAt(document, position, index);
+	if (!target) return undefined;
+	const found = target.imported
+		? moduleRanges(target.module, target.symbol, true, target.importers)
+		: rangesOf(document, index.forDocument(document), target.symbol, true).map((range) => ({
+				uri: document.uri,
+				range,
+			}));
+	const edit = new vscode.WorkspaceEdit();
+	for (const { uri, range } of found) edit.replace(uri, range, newName);
 	return edit;
 }
 

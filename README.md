@@ -17,9 +17,9 @@ suite in the Testing panel.
   keeps its state between selections, which **MiniScript REPL** opens on its own.
 - **Tooltips, Ctrl-click and the Outline** — hover a function for its docstring or an
   intrinsic like `print` for what it does, Ctrl-click a name to jump to where it is
-  defined, Find All References and Rename a local, Go to Symbol in Workspace, and read the
-  file's functions, methods and classes in the Outline view. An `import`'s path is a link
-  to its module. See below.
+  defined, Find All References and Rename — a local, or an imported name across the files
+  that use it — Go to Symbol in Workspace, and read the file's functions, methods and
+  classes in the Outline view. An `import`'s path is a link to its module. See below.
 - **Squiggles before the run** — a member no type has, a block that never closes, and an
   `import` that names no file are marked as you type, with a "did you mean" for the
   first. See below.
@@ -179,18 +179,26 @@ count = 0                   // a variable
 
 `import "knowledge"` makes `knowledge` a name for `knowledge.ms`: hovering or
 Ctrl-clicking `knowledge.loadFacts` reads that file, and the path itself is a link that
-opens it. A name found in neither this file nor an imported module is looked for in the
-workspace's other `.ms` files, and Ctrl-click lists every file that defines it.
+opens it. Find All References and Rename follow it into that file too. A name found in
+neither this file nor an imported module is looked for in the workspace's other `.ms`
+files, and Ctrl-click lists every file that defines it.
 
 **Find All References** (`Shift+F12`) lists every place in the file the name under the
 cursor is written — the declaration too, when the editor asks for it — and **Rename**
 (`F2`) rewrites them. A call through an instance counts: after `sq = new Shape`,
 `sq.degrees` is one of `Shape.degrees`'s uses, the same reading hover and Ctrl-click give,
 and a local spelled `degrees` does not take it away. A field is found through the instance
-that way too: `sq.sides` is a use of the `sides` a method set with `self.sides = 0`. Rename is offered for a local or a
-parameter and for nothing else: a name at the file's top level can be used from files this
-one has not read, and rewriting only the uses it can see would be a quiet mistake — while a
-member access is never renamed as the local it happens to be spelled like.
+that way too: `sq.sides` is a use of the `sides` a method set with `self.sides = 0`.
+
+An imported name belongs to the module that defines it, so both follow it there: on
+`knowledge.loadFacts`, or on the `loadFacts` where `knowledge.ms` defines it, the list is
+the module's own declaration and uses together with every `alias.loadFacts` in the files
+that import it, and Rename rewrites all of them. A file's own `loadFacts` is a different
+name and is left alone. Rename is offered for a local or a parameter anywhere, and for a
+name at a file's top level only when something in the workspace imports that file: a module
+nothing here imports could still be read by a file outside the workspace, and rewriting
+only the uses the editor can see would be a quiet mistake. A member access is never renamed
+as the local it happens to be spelled like.
 
 **Go to Symbol in Workspace** (`Ctrl+T`) searches every `.ms` file for the functions,
 methods, classes and top-level variables the name contains; locals and parameters are

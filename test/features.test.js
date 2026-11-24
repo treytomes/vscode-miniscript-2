@@ -911,7 +911,7 @@ test("a field a constructor sets is a member of the instance", async () => {
 	assert.ok(members.includes("degrees"), "and the method");
 
 	assert.equal(
-		opened.rename.prepareRename(doc, { line: 9, character: 10 }),
+		await opened.rename.prepareRename(doc, { line: 9, character: 10 }),
 		undefined,
 		"a field is not a local"
 	);
@@ -1004,7 +1004,7 @@ test("rename follows the instance, and the method's name is not a local", async 
 		]
 	);
 	assert.equal(
-		opened.rename.prepareRename(doc, { line: 6, character: 12 }),
+		await opened.rename.prepareRename(doc, { line: 6, character: 12 }),
 		undefined,
 		"the member belongs to the class's method, which this file does not rename"
 	);
@@ -1027,13 +1027,13 @@ test("a member access is not renamed as the local it is spelled like", async () 
 	);
 
 	assert.equal(
-		opened.rename.prepareRename(doc, { line: 7, character: 13 }),
+		await opened.rename.prepareRename(doc, { line: 7, character: 13 }),
 		undefined,
 		"the cursor is on the class's method, not on the local"
 	);
 	assert.equal(await opened.rename.provideRenameEdits(doc, { line: 7, character: 13 }, "turns"), undefined);
 
-	const local = opened.rename.prepareRename(doc, { line: 5, character: 1 });
+	const local = await opened.rename.prepareRename(doc, { line: 5, character: 1 });
 	assert.equal(local.placeholder, "degrees", "the local itself still renames");
 });
 
@@ -1224,7 +1224,7 @@ test("a local can be renamed, and a top-level name cannot", async () => {
 		["f = function(x)", "\ty = x + 1", "\treturn x", "end function"].join("\n")
 	);
 
-	const prepared = opened.rename.prepareRename(doc, { line: 1, character: 5 });
+	const prepared = await opened.rename.prepareRename(doc, { line: 1, character: 5 });
 	assert.equal(prepared.placeholder, "x");
 	assert.deepEqual(prepared.range.start, { line: 1, character: 5 });
 
@@ -1239,9 +1239,9 @@ test("a local can be renamed, and a top-level name cannot", async () => {
 	);
 
 	assert.equal(
-		opened.rename.prepareRename(doc, { line: 0, character: 0 }),
+		await opened.rename.prepareRename(doc, { line: 0, character: 0 }),
 		undefined,
-		"a top-level function is used from files this one has not read"
+		"nothing in the workspace imports this file, so its readers cannot be listed"
 	);
 });
 
@@ -1287,6 +1287,160 @@ test("a name in a string or a comment keeps the grammar's color", async () => {
 			[2, 0],
 		]
 	);
+});
+
+// An imported name belongs to the module that defines it, not to the file that writes it,
+// so finding and renaming one follows it there and into every file that imports it.
+const LIB = ["helper = function(x)", "\treturn x", "end function", "print helper(1)"].join(
+	"\n"
+);
+const MAIN = ['import "lib"', "print lib.helper(1)"].join("\n");
+const OTHER = ['import "lib"', "print lib.helper(2)"].join("\n");
+const PALETTE = ["helper = function(x)", "\treturn x * 2", "end function"].join("\n");
+const PAINT = [
+	'import "lib"',
+	'import "palette"',
+	"print lib.helper(1)",
+	"print palette.helper(2)",
+].join("\n");
+
+function project(files) {
+	for (const [name, text] of Object.entries(files)) {
+		opened.files.add(name);
+		opened.modules.set(`/work/${name}.ms`, text);
+	}
+}
+
+function places(found) {
+	return found.map((location) => [
+		location.uri.fsPath,
+		location.range.start.line,
+		location.range.start.character,
+	]);
+}
+
+test("references follow an imported name into its module and its importers", async () => {
+	project({ lib: LIB, main: MAIN, other: OTHER });
+	activate();
+	const doc = document(MAIN, "main");
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 12 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(places(found), [
+		["/work/lib.ms", 0, 0],
+		["/work/lib.ms", 3, 6],
+		["/work/main.ms", 1, 10],
+		["/work/other.ms", 1, 10],
+	]);
+
+	const uses = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 12 },
+		{ includeDeclaration: false }
+	);
+	assert.deepEqual(places(uses), [
+		["/work/lib.ms", 3, 6],
+		["/work/main.ms", 1, 10],
+		["/work/other.ms", 1, 10],
+	]);
+});
+
+test("references from a module's own name list the files that import it", async () => {
+	project({ lib: LIB, main: MAIN, other: OTHER });
+	activate();
+	const doc = document(LIB, "lib");
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 0, character: 1 },
+		{ includeDeclaration: false }
+	);
+	assert.deepEqual(places(found), [
+		["/work/lib.ms", 3, 6],
+		["/work/main.ms", 1, 10],
+		["/work/other.ms", 1, 10],
+	]);
+});
+
+test("rename follows an imported name into its module and every importing file", async () => {
+	project({ lib: LIB, main: MAIN, other: OTHER, palette: PALETTE, paint: PAINT });
+	activate();
+	const doc = document(MAIN, "main");
+
+	const prepared = await opened.rename.prepareRename(doc, { line: 1, character: 12 });
+	assert.equal(prepared.placeholder, "helper");
+	assert.deepEqual(prepared.range.start, { line: 1, character: 10 });
+
+	const edit = await opened.rename.provideRenameEdits(doc, { line: 1, character: 12 }, "assist");
+	assert.deepEqual(
+		edit.edits.map((entry) => [
+			entry.uri.fsPath,
+			entry.range.start.line,
+			entry.range.start.character,
+			entry.text,
+		]),
+		[
+			["/work/lib.ms", 0, 0, "assist"],
+			["/work/lib.ms", 3, 6, "assist"],
+			["/work/main.ms", 1, 10, "assist"],
+			["/work/other.ms", 1, 10, "assist"],
+			["/work/paint.ms", 2, 10, "assist"],
+		]
+	);
+	assert.ok(
+		!edit.edits.some((entry) => entry.uri.fsPath === "/work/palette.ms"),
+		"another module's member of the same name is not renamed"
+	);
+});
+
+test("rename from a module's own name leaves another file's own helper alone", async () => {
+	const shared = [
+		'import "tools"',
+		"helper = function(x)",
+		"\treturn x",
+		"end function",
+		"print helper(1)",
+		"print tools.helper(2)",
+	].join("\n");
+	project({ tools: LIB, main: shared });
+	activate();
+	const doc = document(LIB, "tools");
+
+	const edit = await opened.rename.provideRenameEdits(doc, { line: 0, character: 1 }, "assist");
+	assert.deepEqual(
+		edit.edits.map((entry) => [
+			entry.uri.fsPath,
+			entry.range.start.line,
+			entry.range.start.character,
+		]),
+		[
+			["/work/tools.ms", 0, 0],
+			["/work/tools.ms", 3, 6],
+			["/work/main.ms", 5, 12],
+		],
+		"the importing file's own helper is a different name"
+	);
+});
+
+test("an import written as a path is followed beside the file", async () => {
+	const rel = ['import "../sizes"', "print sizes.helper(1)"].join("\n");
+	project({ sizes: LIB, "sub/rel": rel });
+	activate();
+	const doc = document(rel, "sub/rel");
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 14 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(places(found), [
+		["/work/sizes.ms", 0, 0],
+		["/work/sizes.ms", 3, 6],
+		["/work/sub/rel.ms", 1, 12],
+	]);
 });
 
 test("a problem with no certain repair offers no fix", async () => {
