@@ -194,16 +194,24 @@ function blockProblems(text) {
 				);
 			} else {
 				// The compiler stops on this line, so the report does too, and says what the
-				// block it was meant to close still needs.
-				found.push(
-					problem(
-						token,
-						`\`end ${named}\` cannot close the \`${inner.kind}\` opened on line ` +
-							`${inner.token.line + 1}. Add \`end ${inner.kind}\` before it.`,
-						"error",
-						"mismatched-end"
-					)
+				// block it was meant to close still needs. The fix is that insertion: the end
+				// this line should have had, above it, at the open block's own indentation,
+				// leaving the wrong end itself to be corrected.
+				const record = problem(
+					token,
+					`\`end ${named}\` cannot close the \`${inner.kind}\` opened on line ` +
+						`${inner.token.line + 1}. Add \`end ${inner.kind}\` before it.`,
+					"error",
+					"mismatched-end"
 				);
+				record.fix = {
+					title: `Insert \`end ${inner.kind}\``,
+					line: token.line,
+					character: 0,
+					endCharacter: 0,
+					text: `${indentOf(inner)}end ${inner.kind}\n`,
+				};
+				found.push(record);
 				open.pop();
 			}
 			return;

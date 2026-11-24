@@ -155,6 +155,20 @@ test("an end that cannot close what is open says what to add", () => {
 	assert.equal(found[0].line, 2);
 	assert.match(found[0].message, /`end function` cannot close the `if` opened on line 1/);
 	assert.match(found[0].message, /Add `end if` before it\./);
+	assert.deepEqual(found[0].fix, {
+		title: "Insert `end if`",
+		line: 2,
+		character: 0,
+		endCharacter: 0,
+		text: "end if\n",
+	});
+});
+
+test("a mismatched end is inserted above it, at the open block's indent", () => {
+	const found = lint(["if a then", "\tfor x", "\t\tprint x", "\tend while"].join("\n"));
+	const problem = found.find((each) => each.code === "mismatched-end");
+	assert.equal(problem.fix.title, "Insert `end for`");
+	assert.deepEqual([problem.fix.line, problem.fix.character, problem.fix.text], [3, 0, "\tend for\n"]);
 });
 
 test("a short-form if opens no block", () => {

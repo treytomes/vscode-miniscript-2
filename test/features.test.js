@@ -709,6 +709,24 @@ test("the fix for an outer block brings the ends still open inside it", async ()
 	assert.deepEqual(lint(fixed), []);
 });
 
+test("a mismatched end offers the end that should come before it", async () => {
+	const collection = activate();
+	const doc = document(["if a then", "\tprint 1", "end function"].join("\n"));
+	await opened.events.onDidOpenTextDocument(doc);
+
+	const found = published(collection, doc).find((problem) => problem.code === "mismatched-end");
+	const [action] = await actionsFor(doc, found);
+	assert.equal(action.title, "Insert `end if`");
+
+	const fixed = applyFix(doc, action);
+	assert.equal(fixed, ["if a then", "\tprint 1", "end if", "end function"].join("\n"));
+	assert.deepEqual(
+		lint(fixed).map((problem) => problem.code),
+		["stray-end"],
+		"the wrong end is now the one to correct"
+	);
+});
+
 test("a problem with no certain repair offers no fix", async () => {
 	const collection = activate();
 	const doc = document("end");

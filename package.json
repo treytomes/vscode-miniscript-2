@@ -2,7 +2,7 @@
   "name": "miniscript2",
   "displayName": "MiniScript 2",
   "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting, a run button, notebooks, and the test suite in the Testing panel.",
-  "version": "0.9.0",
+  "version": "0.10.0",
   "publisher": "micro-expert",
   "private": true,
   "license": "MIT",

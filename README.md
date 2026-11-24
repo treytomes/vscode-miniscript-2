@@ -164,10 +164,11 @@ Three problems are marked as you type, without starting the interpreter:
   is a warning rather than an error.
 - **A block that never closes.** `if`, `for`, `while` and `function` are each closed by
   their own `end`. An `end function` inside a still-open `if` is reported on the `end`
-  line with the fix — *add `end if` before it* — and a file that ends with a block open is
-  reported where it opened. A short-form `if x then y` opens nothing, a one-line function
-  (`f = function(n); return n; end function`) closes on its own line, and an `else if`
-  chain is still one `if`. This one is an error: the file does not compile.
+  line, saying to add `end if` before it, and offers that insertion; once it is applied the
+  wrong `end` is itself reported as stray, since it closes nothing. A file that ends with a
+  block open is reported where it opened. A short-form `if x then y` opens nothing, a
+  one-line function (`f = function(n); return n; end function`) closes on its own line, and
+  an `else if` chain is still one `if`. This one is an error: the file does not compile.
 - **An import that names no file.** `import "missing"` is marked on the path itself when
   there is no `missing.ms` in the workspace, and a path relative to the file
   (`import "../src/triples"`) is looked for beside it, the way the interpreter looks. It
@@ -175,10 +176,11 @@ Three problems are marked as you type, without starting the interpreter:
   With no workspace folder to search, imports are not judged at all, so a scratch file is
   never told its imports are missing.
 
-Two of these can be repaired from the squiggle itself. A misspelt member offers the name it
-probably meant — **Replace with `len`** — and an unclosed block offers to insert the `end`
+Three of these can be repaired from the squiggle itself. A misspelt member offers the name
+it probably meant — **Replace with `len`** — an unclosed block offers to insert the `end`
 it is missing, above the `end` that closed an enclosing block or at the end of the file, at
-the block's own indentation; a block still holding another brings the ends for both. The
+the block's own indentation, and an `end` that cannot close what is open offers the `end`
+that should come before it. A block still holding another brings the ends for both. The
 import warning has no such fix, since whether to create the module or correct the path is
 not something a scan can know.
 
