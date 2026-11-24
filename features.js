@@ -13,6 +13,7 @@ const { lint, importTargets } = require("./lint");
 const {
 	KEYWORDS,
 	SCOPES,
+	classOf,
 	inLiteral,
 	innermost,
 	locate,
@@ -300,6 +301,13 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 			const uri = await index.moduleUri(target);
 			const found = uri && locate(await index.forUri(uri), { name, line: 0 });
 			if (found) return [{ uri, symbol: found }];
+		}
+
+		// `sq = new Shape` makes `sq.method` the method this file gave that class.
+		const made = classOf(here, { name: known, line });
+		if (made) {
+			const inherited = locate(here, { name, receiver: made, line });
+			if (inherited) return [{ uri: document.uri, symbol: inherited }];
 		}
 	}
 
@@ -662,6 +670,15 @@ async function memberItems(index, here, imports, receiver, line) {
 		if (symbol.kind === "method" && symbol.receiver === receiver) add(symbolItem(symbol));
 	}
 
+	// `sq = new Shape` completes the methods of the class that made it, before the map's
+	// own members, which an instance has too.
+	const made = classOf(here, { name: receiver, line });
+	if (made) {
+		for (const symbol of here) {
+			if (symbol.kind === "method" && symbol.receiver === made) add(symbolItem(symbol));
+		}
+	}
+
 	const type = typeOf(here, { name: receiver, line });
 	const named = type === undefined && !locate(here, { name: receiver, line }) ? receiver : type;
 	for (const name of builtins.membersOf(named)) {
@@ -802,6 +819,8 @@ function memberKind(symbols, tokens, index, line) {
 		return owner && found && found.receiver === owner.receiver ? "method" : undefined;
 	}
 	if (found && found.kind === "method" && found.receiver === receiver.value) return "method";
+	const made = classOf(symbols, { name: receiver.value, line });
+	if (made && found && found.kind === "method" && found.receiver === made) return "method";
 	const type = typeOf(symbols, { name: receiver.value, line });
 	return type && builtins.member(token.value, type).length ? "intrinsic" : undefined;
 }

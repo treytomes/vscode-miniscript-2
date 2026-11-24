@@ -159,7 +159,8 @@ A member's type is read from the value the receiver was given, so `s = "text"` m
 `s.len` the string's; when the value does not say, every type that has that member is
 listed. `self.name` and `super.name` are the exception that needs no type: inside a method
 they reach the class the method belongs to, so a method called through `self` gets that
-method's tooltip, its jump and its parameters.
+method's tooltip, its jump and its parameters. `sq = new Shape` says the same for the
+instance, so `sq.method` is the method `Shape` was given.
 
 **The Outline** (and the breadcrumb above the editor) lists the file's functions,
 methods, classes and top-level variables, with a method under its class and a nested
@@ -231,10 +232,11 @@ squiggles follow your edits, refreshed shortly after typing stops.
 **Ctrl+Space** completes the names a line can use: the enclosing function's own names and
 parameters first, then the file's top level, then the modules it imports by name. After a
 `.` the list is that receiver's — `s.` offers the string's own members, `xs.` the list's,
-`file.` the file module's, `Shape.` the methods the file gave that class, and `lib.` the
-names `import "lib"` brings in. Nothing is offered inside a string or a comment, where a
-name is text, and a receiver whose type the file cannot prove offers only what the file
-defines on it.
+`file.` the file module's, `Shape.` the methods the file gave that class, `sq.` those same
+methods when `sq = new Shape` made it (the map's own members are still there, since an
+instance is a map), and `lib.` the names `import "lib"` brings in. Nothing is offered
+inside a string or a comment, where a name is text, and a receiver whose type the file
+cannot prove offers only what the file defines on it.
 
 While a call is being written, its parameters are shown in the parameter popup with the
 one the cursor is in in bold: a project function's own list, or an intrinsic's from the

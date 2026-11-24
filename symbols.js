@@ -410,6 +410,11 @@ function scan(text) {
 
 		const value = tokens[definition.valueIndex];
 		symbol.valueType = valueTypeOf(value);
+		// `sq = new Shape` says which class made the name, for the methods of that class.
+		if (value && value.type === "word" && value.value === "new") {
+			const made = tokens[definition.valueIndex + 1];
+			if (made && made.type === "word") symbol.instanceOf = made.value;
+		}
 		if (value && value.type === "word" && value.value === "function") {
 			symbol.kind = symbol.receiver ? "method" : "function";
 			symbol.params = paramsOf(tokens, definition.valueIndex);
@@ -435,6 +440,19 @@ function scan(text) {
 		found.push(symbol);
 	}
 	return found;
+}
+
+// The class a name was made from, `sq = new Shape`, when every assignment to it in its
+// scope names the same class; anything else has no one class to offer.
+function classOf(found, { name, line }) {
+	const symbol = locate(found, { name, line });
+	if (!symbol || !symbol.instanceOf) return undefined;
+	const classes = new Set(
+		found
+			.filter((other) => other.name === name && other.container === symbol.container)
+			.map((other) => other.instanceOf)
+	);
+	return classes.size === 1 ? classes.values().next().value : undefined;
 }
 
 // The definition a reference names: a local or parameter of the enclosing function first,
@@ -476,6 +494,7 @@ module.exports = {
 	scan,
 	locate,
 	typeOf,
+	classOf,
 	innermost,
 	inLiteral,
 	tokenize,

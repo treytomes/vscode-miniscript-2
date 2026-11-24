@@ -863,6 +863,51 @@ test("a notebook cell is colored the same way", async () => {
 	assert.equal(kindOf(tokens, 3, 6), "function");
 });
 
+// An instance made with `new` carries its class, so `sq.` and `sq.method` reach the same
+// members `Shape.` and `Shape.method` do, with the map's own members still there.
+test("completion on an instance offers its class's methods", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"sq = new Shape",
+			"print sq.",
+		].join("\n")
+	);
+
+	const members = labels(await completionAt(doc, 5, 9));
+	assert.ok(members.includes("degrees"), "the class's method");
+	assert.ok(members.includes("len"), "an instance is a map too");
+});
+
+test("an instance's method has its class's tooltip and jump", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"sq = new Shape",
+			"print sq.degrees(2)",
+		].join("\n")
+	);
+
+	const hover = await opened.hover.provideHover(doc, { line: 5, character: 10 });
+	assert.match(hover.contents.value, /Shape\.degrees\(times=1\)/);
+	assert.match(hover.contents.value, /method/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 5, character: 10 });
+	assert.equal(locations.length, 1);
+	assert.deepEqual(locations[0].range.start, { line: 1, character: 6 });
+
+	const tokens = await opened.tokens.provideDocumentSemanticTokens(doc);
+	assert.equal(kindOf(tokens, 5, 9), "method", "the call is coloured as the method it is");
+});
+
 // `self` and `super` name the class the enclosing method was defined on, not a map, so a
 // method called through one resolves like any other method of that class.
 test("a method called through self has a tooltip and a jump", async () => {

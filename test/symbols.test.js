@@ -3,7 +3,7 @@
 
 const { test } = require("node:test");
 const assert = require("node:assert/strict");
-const { scan, statements, locate, typeOf, inLiteral } = require("../symbols.js");
+const { scan, statements, locate, typeOf, classOf, inLiteral } = require("../symbols.js");
 
 function named(symbols, name, receiver) {
 	return symbols.find(
@@ -211,6 +211,17 @@ test("a literal value tells the type the name holds", () => {
 test("a name given two kinds of value has no one type", () => {
 	const symbols = scan(["x = 1", 'x = "one"'].join("\n"));
 	assert.equal(typeOf(symbols, { name: "x" }), undefined);
+});
+
+test("a name made with new says which class made it", () => {
+	const symbols = scan(
+		['Shape = {"sides": 4}', "sq = new Shape", "x = new A", "x = new B"].join("\n")
+	);
+
+	assert.equal(classOf(symbols, { name: "sq", line: 1 }), "Shape");
+	assert.equal(classOf(symbols, { name: "x", line: 3 }), undefined, "two classes, no one answer");
+	assert.equal(classOf(symbols, { name: "Shape", line: 0 }), undefined, "a class is not an instance");
+	assert.equal(classOf(symbols, { name: "nowhere", line: 1 }), undefined);
 });
 
 test("a name inside a string or a comment is not a reference", () => {
