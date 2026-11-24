@@ -1,8 +1,8 @@
 {
   "name": "miniscript2",
   "displayName": "MiniScript 2",
-  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting, a run button, and the test suite in the Testing panel.",
-  "version": "0.3.0",
+  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting, a run button, notebooks, and the test suite in the Testing panel.",
+  "version": "0.4.0",
   "publisher": "micro-expert",
   "private": true,
   "license": "MIT",
@@ -18,7 +18,8 @@
     "vscode": "^1.75.0"
   },
   "activationEvents": [
-    "onStartupFinished"
+    "onStartupFinished",
+    "onNotebookSerializer:miniscript-notebook"
   ],
   "categories": [
     "Programming Languages"
@@ -50,11 +51,32 @@
         "path": "./syntaxes/miniscript.tmLanguage.json"
       }
     ],
+    "notebooks": [
+      {
+        "type": "miniscript-notebook",
+        "displayName": "MiniScript Notebook",
+        "selector": [
+          {
+            "filenamePattern": "*.msnb"
+          }
+        ]
+      }
+    ],
     "commands": [
       {
         "command": "miniscript2.runFile",
         "title": "Run MiniScript File",
         "icon": "$(play)"
+      },
+      {
+        "command": "miniscript2.newNotebook",
+        "title": "New MiniScript Notebook",
+        "icon": "$(notebook)"
+      },
+      {
+        "command": "miniscript2.restartNotebook",
+        "title": "Restart MiniScript Session",
+        "icon": "$(debug-restart)"
       }
     ],
     "menus": {
@@ -62,6 +84,13 @@
         {
           "command": "miniscript2.runFile",
           "when": "resourceLangId == miniscript",
+          "group": "navigation@1"
+        }
+      ],
+      "notebook/toolbar": [
+        {
+          "command": "miniscript2.restartNotebook",
+          "when": "notebookType == miniscript-notebook",
           "group": "navigation@1"
         }
       ]

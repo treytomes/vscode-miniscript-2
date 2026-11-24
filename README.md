@@ -17,8 +17,80 @@ suite in the Testing panel.
   intrinsic like `print` for what it does, Ctrl-click a name to jump to where it is
   defined, and read the file's functions, methods and classes in the Outline view. See
   below.
+- **Notebooks** — a `.msnb` file is a column of cells, each run with Shift+Enter against
+  one MiniScript session, its output underneath, pictures a cell draws included. See below.
 - **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
   and per check, each result marked in the gutter of the check's own line. See below.
+
+## Notebooks
+
+A `.msnb` file opens as a notebook, the way `.ipynb` does: cells one above another, each
+run on its own with **Shift+Enter** or the ▶ beside it, its output underneath.
+**New MiniScript Notebook** in the Command Palette opens one, and saving it writes a
+`.msnb` next to the rest of the project. A new cell is MiniScript, and Markdown cells work
+the way they do in any other notebook.
+
+**One session per notebook.** A notebook's cells share one MiniScript process, so a name
+one cell defines is there for the next one:
+
+```miniscript
+x = 41          // first cell
+print x + 1     // second cell prints 42
+```
+
+**What a cell shows.** What it prints, as the interpreter writes it. A cell of a single
+line also shows that line's value, the way the REPL echoes `1 + 1`; a cell of several
+lines runs as one block, which has no value to echo, so write `print` for those.
+
+**Pictures.** A cell can draw a picture as well as print it, two ways:
+
+- `notebook.mermaid(diagram)` — a Mermaid diagram, drawn by VS Code's own renderer (1.121
+  or later; before that the fence shows as a code block). It takes the list
+  `globals["mermaid"].build(...)` returns, or one string of its lines.
+- `notebook.svg(svg)` — an SVG document, which every VS Code shows as a picture. This is
+  what `globals["mermaid"].svg(...)` returns: the same diagram drawn by the project's own
+  renderer, so it needs nothing from the version.
+
+```miniscript
+import "mermaid"
+
+diagram = mermaid.build(facts, types, rules)
+print diagram.join(char(10))   // the text, as always
+notebook.mermaid(diagram)      // and the picture, under it
+
+notebook.svg(mermaid.svg(facts, types, rules))   // the same diagram, drawn here
+```
+
+Both go through `notebook.draw(mime, text)`, so anything with a type VS Code knows is
+drawn the same way. Drawing only draws: what the cell prints is still its text output, so
+print the source too when you want both — `examples/explore.msnb` does. A picture drawn
+before a cell fails stays with the cell's output, above the error.
+
+**Errors.** A runtime or compiler error stops that cell and is shown in red under it. The
+session carries on, so the values from before the error are still there and the next cell
+runs in the same session. What the interpreter says after the first error — its own
+confusion about the lines that followed — is left out.
+
+**Stopping and restarting.** The stop button kills the interpreter rather than the cell:
+MiniScript cannot be interrupted part way. The next cell then starts a new session, so
+the values defined before are gone. **Restart MiniScript Session** (the notebook toolbar,
+or the Command Palette) does the same deliberately. Closing the notebook ends its
+session, and outputs are not written to the file: only the cells are saved.
+
+**Imports and the working folder.** A cell runs in the notebook's project folder and
+imports the way the project's programs do: `MS_IMPORT_PATH` defaults to the notebook's
+folder, `<project>/src` and the project folder, and an `MS_IMPORT_PATH` in the project's
+`.env` replaces that. That is what makes `import "triples"` work in a notebook in this
+repository — `examples/explore.msnb` is a notebook built that way.
+
+A session has no entry script, but it does have an answer for one: `shellArgs` holds the
+notebook's own path, set before the REPL starts. A loader that resolves a data file from
+the entry script is still working from a path of its own — this project's loaders resolve
+against the folder the module was loaded from, which a notebook does not have, so name the
+file relative to the project folder instead (`"data/facts.kb"`).
+
+A cell cannot read the keyboard: `input` would swallow the notebook's own lines, so a
+program that asks questions belongs in **Run MiniScript File** and its terminal.
 
 ## Tooltips, Ctrl-click and the Outline
 
@@ -165,12 +237,17 @@ CommonJS, and VS Code supplies its own `vscode` module.
 
 - Open this folder in VS Code and press `F5`; the checked-in `.vscode/launch.json` starts
   an Extension Development Host with this folder as the development extension.
-- `npm test` (`node --test`) runs the symbol scanner's tests, and the Testing panel's
-  tests against a stub `vscode` and the real interpreter. The panel's tests skip when
-  `../3rd-party` has no interpreter and `MINISCRIPT_EXE_PATH` is unset.
+- `npm test` (`node --test`) runs the symbol scanner's tests, the Testing panel's tests,
+  and the notebook's tests: its file format and controller against a stub `vscode`, and
+  its cell protocol against the real interpreter. Those tests skip when `../3rd-party` has
+  no interpreter and `MINISCRIPT_EXE_PATH` is unset.
 - `symbols.js` reads a file into symbols (nothing in it requires `vscode`); `builtins.js`
   is the table of intrinsic functions and methods; `features.js` turns both into the
   hover, definition and outline providers.
+- `notebook-session.js` is the cell protocol — the interpreter process, what is written
+  to it, and how its output is read back — and uses no `vscode`, so it is tested against
+  the interpreter itself; `notebook.js` is the `.msnb` serializer and the controller
+  around it.
 - To package a `.vsix`: `npx @vscode/vsce package`, which writes `out/miniscript2.vsix`.
   `.vscodeignore` keeps `.vscode/`, `out/` and any `.vsix` out of the package.
 

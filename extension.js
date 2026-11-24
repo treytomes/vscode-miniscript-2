@@ -3,6 +3,7 @@ const path = require("path");
 const vscode = require("vscode");
 const testing = require("./testing");
 const features = require("./features");
+const notebook = require("./notebook");
 
 const SETTING = "miniscript2.interpreterPath";
 const ENV_VAR = "MINISCRIPT_EXE_PATH";
@@ -13,8 +14,17 @@ function quote(value) {
 }
 
 function projectDir(document) {
-	const folder = vscode.workspace.getWorkspaceFolder(document.uri);
-	return folder ? folder.uri.fsPath : path.dirname(document.uri.fsPath);
+	return projectDirFor(document.uri);
+}
+
+// The folder a file belongs to: its workspace folder, the folder it sits in, or the first
+// workspace folder for a document that has no file yet, such as a new notebook.
+function projectDirFor(uri) {
+	const folder = vscode.workspace.getWorkspaceFolder(uri);
+	if (folder) return folder.uri.fsPath;
+	if (uri.scheme === "file") return path.dirname(uri.fsPath);
+	const folders = vscode.workspace.workspaceFolders;
+	return folders && folders.length ? folders[0].uri.fsPath : process.cwd();
 }
 
 // Reads KEY=value from the project's .env, the same file run.bat uses, so the
@@ -137,6 +147,7 @@ function activate(context) {
 	);
 	testing.register(context, { resolveInterpreter });
 	features.register(context);
+	notebook.register(context, { resolveInterpreter, projectDirFor, readEnvValue });
 }
 
 function deactivate() {}
