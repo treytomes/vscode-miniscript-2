@@ -4,18 +4,11 @@ const vscode = require("vscode");
 const testing = require("./testing");
 const features = require("./features");
 const notebook = require("./notebook");
+const run = require("./run");
 
 const SETTING = "miniscript2.interpreterPath";
 const ENV_VAR = "MINISCRIPT_EXE_PATH";
 const DEFAULT_INTERPRETER = "miniscript";
-
-function quote(value) {
-	return `"${value}"`;
-}
-
-function projectDir(document) {
-	return projectDirFor(document.uri);
-}
 
 // The folder a file belongs to: its workspace folder, the folder it sits in, or the first
 // workspace folder for a document that has no file yet, such as a new notebook.
@@ -107,44 +100,8 @@ function resolveInterpreter(dir) {
 	};
 }
 
-async function runActiveFile() {
-	const editor = vscode.window.activeTextEditor;
-	if (!editor || editor.document.languageId !== "miniscript") {
-		vscode.window.showWarningMessage("Open a MiniScript file to run it.");
-		return;
-	}
-
-	const document = editor.document;
-	if (document.isDirty && !(await document.save())) {
-		vscode.window.showWarningMessage(
-			`Could not save ${path.basename(document.uri.fsPath)}; not running it.`
-		);
-		return;
-	}
-
-	const dir = projectDir(document);
-	const interpreter = resolveInterpreter(dir);
-	if (interpreter.problem) {
-		const openSettings = "Open Settings";
-		const choice = await vscode.window.showErrorMessage(interpreter.problem, openSettings);
-		if (choice === openSettings) {
-			await vscode.commands.executeCommand("workbench.action.openSettings", SETTING);
-		}
-		return;
-	}
-
-	const terminal = vscode.window.createTerminal({
-		name: `MiniScript: ${path.basename(document.uri.fsPath)}`,
-		cwd: dir,
-	});
-	terminal.show();
-	terminal.sendText(`${quote(interpreter.command)} ${quote(document.uri.fsPath)}`);
-}
-
 function activate(context) {
-	context.subscriptions.push(
-		vscode.commands.registerCommand("miniscript2.runFile", runActiveFile)
-	);
+	run.register(context, { resolveInterpreter, projectDirFor, readEnvValue });
 	testing.register(context, { resolveInterpreter });
 	features.register(context);
 	notebook.register(context, { resolveInterpreter, projectDirFor, readEnvValue });

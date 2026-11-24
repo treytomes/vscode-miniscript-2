@@ -10,9 +10,11 @@ suite in the Testing panel.
   files, with the aliases `MiniScript`, `MiniScript 2` and `miniscript`.
 - A language configuration, so `//` comments toggle, brackets match and auto-close, and
   `if` / `else` / `for` / `while` / `function` … `end` blocks indent themselves.
-- **Run MiniScript File** — a play button in the editor title bar, also on the Command
-  Palette. It saves the file if it is dirty, opens a terminal in the project folder and
-  runs the file there.
+- **Running** — **Run MiniScript File** (a play button, also on the Command Palette)
+  saves the file if it is dirty and runs it in a terminal in the project folder;
+  **Run MiniScript File with Arguments** asks for them first, and they arrive in
+  `shellArgs`; **Run MiniScript Selection** sends the selection to a MiniScript REPL that
+  keeps its state between selections, which **MiniScript REPL** opens on its own.
 - **Tooltips, Ctrl-click and the Outline** — hover a function for its docstring or an
   intrinsic like `print` for what it does, Ctrl-click a name to jump to where it is
   defined, and read the file's functions, methods and classes in the Outline view. See
@@ -32,6 +34,26 @@ suite in the Testing panel.
   one MiniScript session, its output underneath, pictures a cell draws included. See below.
 - **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
   and per check, each result marked in the gutter of the check's own line. See below.
+
+## Running
+
+All of these are terminals, so a program keeps its input, its colours and the keyboard.
+
+- **Run MiniScript File** — the play button and the Command Palette. Saves the file if it
+  is dirty, then runs it in a terminal in the project folder.
+- **Run MiniScript File with Arguments** — asks for a line of arguments first. They go
+  after the file exactly as typed, so the shell splits them, and the program reads them
+  from `shellArgs`.
+- **Run MiniScript Selection** — the editor's context menu. The selected text is written
+  to a MiniScript REPL, so `x = 41` in one selection is there for `print x` in the next;
+  a multi-line selection goes in as it stands, so a function can be defined across lines.
+- **MiniScript REPL** — opens that REPL on its own, in the project folder, with
+  `MS_IMPORT_PATH` set the way a notebook cell gets it (`<project>/src` and the project
+  folder, or the project's `.env`). Closing the terminal ends the REPL.
+
+A selection runs as the REPL reads it, expression by expression, so a `return` outside a
+function, or a stray `end`, is reported where it stands. To run a whole program with its
+imports resolved the way the interpreter resolves them, run the file.
 
 ## Notebooks
 
@@ -342,6 +364,8 @@ CommonJS, and VS Code supplies its own `vscode` module.
   is the table of intrinsic functions and methods; `lint.js` finds the problems those two
   can see without running the file; `features.js` turns them into the hover, definition,
   outline, completion and signature-help providers and the diagnostics.
+- `run.js` is the Run commands: the file with arguments, the selection in a REPL, and
+the REPL itself.
 - `notebook-session.js` is the cell protocol — the interpreter process, what is written
   to it, and how its output is read back — and uses no `vscode`, so it is tested against
   the interpreter itself; `notebook.js` is the `.msnb` serializer and the controller
