@@ -26,19 +26,14 @@ test("a member is looked up on the type the value holds", () => {
 });
 
 test("a member of an unknown type is offered for every type that has one", () => {
-	assert.deepEqual(member("len").map((variant) => variant.type), [
-		"string",
-		"list",
-		"map",
-		"RawData",
-	]);
+	assert.deepEqual(member("len").map((variant) => variant.type), ["string", "list", "map"]);
 	assert.deepEqual(member("push").map((variant) => variant.type), ["list", "map"]);
 	assert.deepEqual(member("lower").map((variant) => variant.type), ["string"]);
 	assert.deepEqual(member("nothing"), []);
 });
 
 test("every entry carries a call and a note", () => {
-	for (const name of ["hasIndex", "indexOf", "values", "readLines", "collect"]) {
+	for (const name of ["hasIndex", "indexOf", "values", "readLines", "close"]) {
 		for (const variant of member(name)) {
 			assert.equal(typeof variant.call, "string", name);
 			assert.ok(variant.note.length > 0, name);
