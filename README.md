@@ -20,6 +20,10 @@ suite in the Testing panel.
 - **Squiggles before the run** — a member no type has, a block that never closes, and an
   `import` that names no file are marked as you type, with a "did you mean" for the
   first. See below.
+- **Completion and a call's parameters** — Ctrl+Space offers the names in scope, an
+  imported module's names after its alias, and a receiver's own and the language's
+  members; typing a call shows its parameters with the one you are writing in bold. See
+  below.
 - **Notebooks** — a `.msnb` file is a column of cells, each run with Shift+Enter against
   one MiniScript session, its output underneath, pictures a cell draws included. See below.
 - **Testing panel** — your suite in VS Code's own Test Explorer, one item per case module
@@ -170,6 +174,21 @@ Nothing is run and nothing is written: the same text scan behind the tooltips an
 Outline answers these, so a file the interpreter could not start is still read. The
 squiggles follow your edits, refreshed shortly after typing stops.
 
+## Completing names, and a call's parameters
+
+**Ctrl+Space** completes the names a line can use: the enclosing function's own names and
+parameters first, then the file's top level, then the modules it imports by name. After a
+`.` the list is that receiver's — `s.` offers the string's own members, `xs.` the list's,
+`file.` the file module's, `Shape.` the methods the file gave that class, and `lib.` the
+names `import "lib"` brings in. Nothing is offered inside a string or a comment, where a
+name is text, and a receiver whose type the file cannot prove offers only what the file
+defines on it.
+
+While a call is being written, its parameters are shown in the parameter popup with the
+one the cursor is in in bold: a project function's own list, or an intrinsic's from the
+language's tables (`s.split(delimiter=" ", maxCount=null)`). The count follows the call's
+own commas, so a call inside an argument does not move it.
+
 ## Using the Testing panel
 
 Your suite runs inside VS Code's own Test Explorer — the same panel every other language
@@ -269,14 +288,15 @@ CommonJS, and VS Code supplies its own `vscode` module.
 - Open this folder in VS Code and press `F5`; the checked-in `.vscode/launch.json` starts
   an Extension Development Host with this folder as the development extension.
 - `npm test` (`node --test`) runs the symbol scanner's tests, the lint pass's, the
-  diagnostics' wiring against a stub `vscode`, the Testing panel's tests, and the
-  notebook's tests: its file format and controller against a stub `vscode`, and its cell
-  protocol against the real interpreter. Those tests skip when `../3rd-party` has no
-  interpreter and `MINISCRIPT_EXE_PATH` is unset.
+  diagnostics' and the completion and signature-help providers' wiring against a stub
+  `vscode`, the Testing panel's tests, and the notebook's tests: its file format and
+  controller against a stub `vscode`, and its cell protocol against the real interpreter.
+  Those tests skip when `../3rd-party` has no interpreter and `MINISCRIPT_EXE_PATH` is
+  unset.
 - `symbols.js` reads a file into symbols (nothing in it requires `vscode`); `builtins.js`
   is the table of intrinsic functions and methods; `lint.js` finds the problems those two
-  can see without running the file; `features.js` turns them into the hover, definition
-  and outline providers and the diagnostics.
+  can see without running the file; `features.js` turns them into the hover, definition,
+  outline, completion and signature-help providers and the diagnostics.
 - `notebook-session.js` is the cell protocol — the interpreter process, what is written
   to it, and how its output is read back — and uses no `vscode`, so it is tested against
   the interpreter itself; `notebook.js` is the `.msnb` serializer and the controller

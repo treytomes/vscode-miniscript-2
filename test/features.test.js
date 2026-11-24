@@ -15,8 +15,12 @@ function disposable() {
 
 const opened = {
 	collection: undefined,
+	completion: undefined,
+	signature: undefined,
+	triggers: {},
 	events: {},
 	files: new Set(),
+	modules: new Map(),
 };
 
 function remember(name, handler) {
@@ -39,11 +43,35 @@ const vscode = {
 	},
 	SymbolKind: { Function: 11, Method: 5, Class: 4, Variable: 12 },
 	MarkdownString: class {
+		constructor(value) {
+			this.value = value;
+		}
 		appendCodeblock() {
 			return this;
 		}
 		appendMarkdown() {
 			return this;
+		}
+	},
+	CompletionItemKind: { Method: 0, Function: 1, Property: 2, Variable: 5, Class: 6, Module: 7 },
+	CompletionItem: class {
+		constructor(label, kind) {
+			Object.assign(this, { label, kind });
+		}
+	},
+	SignatureHelp: class {
+		constructor() {
+			Object.assign(this, { signatures: [], activeSignature: 0, activeParameter: 0 });
+		}
+	},
+	SignatureInformation: class {
+		constructor(label, documentation) {
+			Object.assign(this, { label, documentation, parameters: [] });
+		}
+	},
+	ParameterInformation: class {
+		constructor(label) {
+			Object.assign(this, { label });
 		}
 	},
 	Hover: class {
@@ -85,6 +113,16 @@ const vscode = {
 		registerHoverProvider: () => disposable(),
 		registerDefinitionProvider: () => disposable(),
 		registerDocumentSymbolProvider: () => disposable(),
+		registerCompletionItemProvider: (selector, provider, ...triggers) => {
+			opened.completion = provider;
+			opened.triggers.completion = triggers;
+			return disposable();
+		},
+		registerSignatureHelpProvider: (selector, provider, ...triggers) => {
+			opened.signature = provider;
+			opened.triggers.signature = triggers;
+			return disposable();
+		},
 	},
 	workspace: {
 		workspaceFolders: [{ uri: { fsPath: "/work" } }],
@@ -96,7 +134,7 @@ const vscode = {
 				? [{ fsPath: `/work/${name}.ms`, toString: () => `file:///work/${name}.ms` }]
 				: [];
 		},
-		fs: { readFile: async () => Buffer.from("") },
+		fs: { readFile: async (uri) => Buffer.from(opened.modules.get(uri.fsPath) || "") },
 		onDidOpenTextDocument: (handler) => remember("onDidOpenTextDocument", handler),
 		onDidChangeTextDocument: (handler) => remember("onDidChangeTextDocument", handler),
 		onDidSaveTextDocument: (handler) => remember("onDidSaveTextDocument", handler),
@@ -116,6 +154,7 @@ const features = require("../features.js");
 
 function activate() {
 	opened.events = {};
+	opened.triggers = {};
 	features.register({ subscriptions: [] });
 	return opened.collection;
 }
@@ -131,6 +170,7 @@ function document(text, name = "demo") {
 			toString: () => `file:///work/${name}.ms`,
 		},
 		getText: () => value,
+		lineAt: (line) => ({ text: value.split(/\r?\n/)[line] || "" }),
 		set(next) {
 			value = next;
 			this.version += 1;
@@ -223,4 +263,150 @@ test("closing a document takes its squiggles with it", async () => {
 	await opened.events.onDidCloseTextDocument(doc);
 
 	assert.equal(collection.entries.has(doc.uri.toString()), false);
+});
+
+function labels(items) {
+	return items.map((item) => item.label);
+}
+
+function completionAt(doc, line, character) {
+	return opened.completion.provideCompletionItems(doc, { line, character });
+}
+
+function helpAt(doc, line, character) {
+	return opened.signature.provideSignatureHelp(doc, { line, character });
+}
+
+test("completion offers the names in scope, the enclosing function's own first", async () => {
+	activate();
+	const doc = document(
+		[
+			"count = 0",
+			"outer = function(thing)",
+			"\tlocal = 1",
+			"\treturn local",
+			"end function",
+			"other = function()",
+			"\tsecond = 2",
+			"\treturn second",
+			"end function",
+		].join("\n")
+	);
+
+	const inside = labels(await completionAt(doc, 3, 13));
+	assert.ok(inside.includes("local"), "the function's own name");
+	assert.ok(inside.includes("thing"), "a parameter is a name here");
+	assert.ok(inside.includes("count"), "the file's top level is in scope too");
+	assert.ok(!inside.includes("second"), "another function's local is not");
+
+	const outside = labels(await completionAt(doc, 0, 5));
+	assert.ok(outside.includes("count"));
+	assert.ok(!outside.includes("local"));
+});
+
+test("a member is completed from the receiver's type", async () => {
+	activate();
+	const string = document(['s = "hi"', "xs = [1]", "print s."].join("\n"));
+	const members = labels(await completionAt(string, 2, 8));
+	assert.ok(members.includes("upper"));
+	assert.ok(members.includes("split"));
+	assert.ok(!members.includes("push"), "push belongs to a list");
+
+	const list = document(['s = "hi"', "xs = [1]", "print xs."].join("\n"));
+	const listMembers = labels(await completionAt(list, 2, 9));
+	assert.ok(listMembers.includes("push"));
+	assert.ok(listMembers.includes("len"));
+	assert.ok(!listMembers.includes("upper"));
+});
+
+test("a receiver the language ships completes from its own members", async () => {
+	activate();
+	const doc = document("print file.");
+	const members = labels(await completionAt(doc, 0, 11));
+	assert.ok(members.includes("readLines"));
+	assert.ok(members.includes("exists"));
+});
+
+test("a class completes the methods the file gave it", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 0}',
+			"Shape.degrees = function",
+			"\treturn 1",
+			"end function",
+			"print Shape.",
+		].join("\n")
+	);
+	const members = labels(await completionAt(doc, 4, 12));
+	assert.ok(members.includes("degrees"));
+});
+
+test("an imported module completes through its alias", async () => {
+	opened.files.add("lib");
+	opened.modules.set(
+		"/work/lib.ms",
+		["helper = function(x)", "\treturn x", "end function", "value = 1"].join("\n")
+	);
+	activate();
+	const doc = document('import "lib"\nprint lib.');
+	const items = await completionAt(doc, 1, 10);
+	assert.deepEqual(labels(items).sort(), ["helper", "value"]);
+	assert.equal(items.find((item) => item.label === "helper").detail, "helper(x)");
+});
+
+test("a name in a string or a comment is not completed", async () => {
+	activate();
+	assert.equal(await completionAt(document('print "xs."'), 0, 10), undefined);
+	assert.equal(await completionAt(document("// xs."), 0, 6), undefined);
+});
+
+test("the providers ask to be told about a dot and a call's characters", () => {
+	activate();
+	assert.deepEqual(opened.triggers.completion, ["."]);
+	assert.deepEqual(opened.triggers.signature, ["(", ","]);
+});
+
+test("a call's parameters are shown, with the one being written active", async () => {
+	activate();
+	const doc = document(
+		["add = function(a, b=2)", "\treturn a + b", "end function", "add(1, "].join("\n")
+	);
+	const help = await helpAt(doc, 3, 7);
+	assert.equal(help.signatures.length, 1);
+	assert.equal(help.signatures[0].label, "add(a, b=2)");
+	assert.deepEqual(
+		help.signatures[0].parameters.map((parameter) => parameter.label),
+		["a", "b=2"]
+	);
+	assert.equal(help.activeParameter, 1);
+});
+
+test("an intrinsic's parameters come from the language's own signature", async () => {
+	activate();
+	const doc = document(['s = "hi"', "print s.split("].join("\n"));
+	const help = await helpAt(doc, 1, 14);
+	assert.equal(help.signatures[0].label, 's.split(delimiter=" ", maxCount=null)');
+	assert.deepEqual(
+		help.signatures[0].parameters.map((parameter) => parameter.label),
+		['delimiter=" "', "maxCount=null"]
+	);
+	assert.equal(help.activeParameter, 0);
+
+	const next = document(['s = "hi"', 'print s.split(",", '].join("\n"));
+	const second = await helpAt(next, 1, 19);
+	assert.equal(second.activeParameter, 1);
+});
+
+test("an argument's own call does not move the outer call's parameter", async () => {
+	activate();
+	const help = await helpAt(document("print(abs(-1), "), 0, 16);
+	assert.ok(help.signatures[0].label.startsWith("print("));
+	assert.equal(help.signatures[0].parameters.length, 2);
+	assert.equal(help.activeParameter, 1);
+});
+
+test("no parameters are shown outside a call", async () => {
+	activate();
+	assert.equal(await helpAt(document("print 1"), 0, 7), undefined);
 });

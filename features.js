@@ -1,7 +1,8 @@
 // features.js — the VS Code side of symbols.js: the hover tooltip, Go to Definition
-// (Ctrl-click) and the Outline view, and the squiggles lint.js finds shown in a
-// DiagnosticCollection. The scan is in symbols.js, the language's own intrinsics in
-// builtins.js, so this file only turns those records into what the providers return.
+// (Ctrl-click), the Outline view, completion, the parameters of the call being written,
+// and the squiggles lint.js finds shown in a DiagnosticCollection. The scan is in
+// symbols.js, the language's own intrinsics in builtins.js, so this file only turns those
+// records into what the providers return.
 
 const fs = require("fs");
 const path = require("path");
@@ -24,6 +25,17 @@ const KINDS = {
 	variable: vscode.SymbolKind.Variable,
 	parameter: vscode.SymbolKind.Variable,
 };
+
+const COMPLETION_KINDS = {
+	function: vscode.CompletionItemKind.Function,
+	method: vscode.CompletionItemKind.Method,
+	class: vscode.CompletionItemKind.Class,
+	variable: vscode.CompletionItemKind.Variable,
+	parameter: vscode.CompletionItemKind.Variable,
+};
+
+// The kinds of symbol whose body spans lines, so a position can be read as inside one.
+const FUNCTION_KINDS = new Set(["function", "method"]);
 
 // `globals.x` is this file's own x, and self/super/locals/outer name a map whose contents
 // the scan cannot know; none of them is a receiver to look a method up on.
@@ -224,6 +236,27 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 // parameter before a top-level name), the module an import names, an intrinsic, then the
 // rest of the workspace. A match with no `uri` is an intrinsic, which has no file. Empty
 // when the position is not on a name that has a definition.
+// What a name means where it is written: a local or parameter of the enclosing function,
+// a method of its receiver, this file's top level, the module an import names, an
+// intrinsic, then the rest of the workspace. Shared by Ctrl-click, hover and signature
+// help, so the three never disagree about a call.
+async function resolve(document, index, here, imports, { name, receiver, line }) {
+	if (receiver) return method(document, index, here, imports, { name, receiver, line });
+
+	const symbol = locate(here, { name, line });
+	if (symbol) return [{ uri: document.uri, symbol }];
+
+	if (imports.has(name)) {
+		const uri = await index.moduleUri(imports.get(name));
+		if (uri) return [{ uri, symbol: moduleSymbol(name, imports.get(name)) }];
+	}
+
+	const intrinsic = builtins.global(name);
+	if (intrinsic) return [{ symbol: intrinsic }];
+
+	return index.search(name, undefined, document.uri);
+}
+
 async function find(document, position, index) {
 	const text = document.getText();
 
@@ -240,24 +273,11 @@ async function find(document, position, index) {
 	if (KEYWORDS.has(name)) return [];
 
 	const before = document.lineAt(position.line).text.slice(0, range.start.character);
-	const receiver = receiverBefore(before);
-	const here = index.forDocument(document);
-	const imports = importsOf(text);
-
-	if (receiver) return method(document, index, here, imports, { name, receiver, line: position.line });
-
-	const symbol = locate(here, { name, line: position.line });
-	if (symbol) return [{ uri: document.uri, symbol }];
-
-	if (imports.has(name)) {
-		const uri = await index.moduleUri(imports.get(name));
-		if (uri) return [{ uri, symbol: moduleSymbol(name, imports.get(name)) }];
-	}
-
-	const intrinsic = builtins.global(name);
-	if (intrinsic) return [{ symbol: intrinsic }];
-
-	return index.search(name, undefined, document.uri);
+	return resolve(document, index, index.forDocument(document), importsOf(text), {
+		name,
+		receiver: receiverBefore(before),
+		line: position.line,
+	});
 }
 
 function definition(document, position, index) {
@@ -333,6 +353,214 @@ function outline(document, index) {
 		else roots.push(items.get(symbol));
 	}
 	return roots;
+}
+
+function symbolItem(symbol) {
+	const item = new vscode.CompletionItem(
+		symbol.name,
+		COMPLETION_KINDS[symbol.kind] || vscode.CompletionItemKind.Variable
+	);
+	if (symbol.signature) item.detail = symbol.signature;
+	const note = symbol.doc || symbol.comment;
+	if (note) item.documentation = new vscode.MarkdownString(note);
+	return item;
+}
+
+function intrinsicItem(name, variant) {
+	const item = new vscode.CompletionItem(
+		name,
+		variant.call.includes("(")
+			? vscode.CompletionItemKind.Method
+			: vscode.CompletionItemKind.Property
+	);
+	item.detail = variant.call;
+	item.documentation = new vscode.MarkdownString(variant.note);
+	return item;
+}
+
+// What a name can be at this line: the enclosing function's own names first, then the
+// file's top level, then the modules it imports, which are names too.
+function scopeItems(here, line, imports) {
+	const items = [];
+	const seen = new Set();
+	const add = (item) => {
+		if (seen.has(item.label)) return;
+		seen.add(item.label);
+		items.push(item);
+	};
+
+	const owner = innermost(here, line, { kinds: FUNCTION_KINDS });
+	if (owner) {
+		for (const symbol of here) {
+			if (symbol.container === owner.name) add(symbolItem(symbol));
+		}
+	}
+	for (const symbol of here) {
+		if (!symbol.container && !symbol.receiver) add(symbolItem(symbol));
+	}
+	for (const [alias, target] of imports) {
+		const item = new vscode.CompletionItem(alias, vscode.CompletionItemKind.Module);
+		item.detail = `import "${target}"`;
+		add(item);
+	}
+	return items;
+}
+
+// Everything `receiver.` can be: this file's methods on that receiver, an imported module's
+// own names, and the intrinsic table's members for the receiver's type. A receiver the
+// file does not define may still name a module the language ships (`file`), which has
+// members of its own.
+async function memberItems(index, here, imports, receiver, line) {
+	const items = [];
+	const seen = new Set();
+	const add = (item) => {
+		if (seen.has(item.label)) return;
+		seen.add(item.label);
+		items.push(item);
+	};
+
+	if (receiver === "globals") {
+		for (const symbol of here) {
+			if (!symbol.container && !symbol.receiver) add(symbolItem(symbol));
+		}
+		return items;
+	}
+
+	// `self` is the instance of the class the enclosing method belongs to, and `super` is
+	// the same instance's prototype: both reach that class's methods.
+	if (receiver === "self" || receiver === "super") {
+		const owner = innermost(here, line, { kinds: FUNCTION_KINDS });
+		const type = owner && owner.kind === "method" ? owner.receiver : undefined;
+		for (const symbol of here) {
+			if (symbol.kind === "method" && (!type || symbol.receiver === type)) add(symbolItem(symbol));
+		}
+		return items;
+	}
+
+	if (imports.has(receiver)) {
+		const uri = await index.moduleUri(imports.get(receiver));
+		if (!uri) return items;
+		for (const symbol of await index.forUri(uri)) {
+			if (!symbol.container && !symbol.receiver) add(symbolItem(symbol));
+		}
+		return items;
+	}
+
+	for (const symbol of here) {
+		if (symbol.kind === "method" && symbol.receiver === receiver) add(symbolItem(symbol));
+	}
+
+	const type = typeOf(here, { name: receiver, line });
+	const named = type === undefined && !locate(here, { name: receiver, line }) ? receiver : type;
+	for (const name of builtins.membersOf(named)) {
+		const [variant] = builtins.member(name, named);
+		if (variant) add(intrinsicItem(name, variant));
+	}
+	return items;
+}
+
+// A `.` after a name asks what that receiver has; anywhere else asks for the names in
+// scope. Neither is answered inside a string or a comment, where a name is text.
+async function complete(document, position, index) {
+	const text = document.getText();
+	if (inLiteral(text, position.line, position.character)) return undefined;
+
+	const before = document.lineAt(position.line).text.slice(0, position.character);
+	const here = index.forDocument(document);
+	const imports = importsOf(text);
+	const member = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(before);
+	if (member) return memberItems(index, here, imports, member[1], position.line);
+	return scopeItems(here, position.line, imports);
+}
+
+// The call the cursor is in, read from the text before it: the name in front of the
+// innermost open parenthesis, the receiver when the name is a member of one, and which
+// argument the cursor is in, counted by the commas at that call's own depth.
+function callAt(text) {
+	const open = [];
+	let quoted = false;
+	for (let i = 0; i < text.length; i += 1) {
+		const ch = text[i];
+		if (quoted) {
+			if (ch === '"') {
+				if (text[i + 1] === '"') i += 1;
+				else quoted = false;
+			}
+			continue;
+		}
+		if (ch === '"') {
+			quoted = true;
+			continue;
+		}
+		if (ch === "/" && text[i + 1] === "/") break;
+		if (ch === "(" || ch === "[" || ch === "{") {
+			open.push({ bracket: ch, at: i, commas: 0 });
+			continue;
+		}
+		if (ch === ")" || ch === "]" || ch === "}") {
+			open.pop();
+			continue;
+		}
+		if (ch === "," && open.length) open[open.length - 1].commas += 1;
+	}
+
+	const paren = [...open].reverse().find((entry) => entry.bracket === "(");
+	if (!paren) return undefined;
+	const head = text.slice(0, paren.at);
+	const member = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
+	if (member) return { name: member[2], receiver: member[1], active: paren.commas };
+	const plain = /([A-Za-z_][A-Za-z0-9_]*)\s*$/.exec(head);
+	return plain ? { name: plain[1], active: paren.commas } : undefined;
+}
+
+// The parts of an intrinsic's signature string, such as
+// `split(self, delimiter=" ", maxCount=null)`.
+function parametersOf(signature) {
+	const open = signature.indexOf("(");
+	const close = signature.lastIndexOf(")");
+	if (open < 0 || close < open) return [];
+	return signature
+		.slice(open + 1, close)
+		.split(",")
+		.map((text) => text.trim())
+		.filter(Boolean);
+}
+
+function signatureOf(symbol, active) {
+	const parameters = symbol.params
+		? symbol.params.map((param) => param.text)
+		: parametersOf(symbol.signature || "");
+	const label = symbol.signature || symbol.name;
+	if (!parameters.length && !label.includes("(")) return undefined;
+
+	const note = symbol.doc || symbol.comment;
+	const info = new vscode.SignatureInformation(
+		label,
+		note ? new vscode.MarkdownString(note) : undefined
+	);
+	info.parameters = parameters.map((text) => new vscode.ParameterInformation(text));
+
+	const help = new vscode.SignatureHelp();
+	help.signatures = [info];
+	help.activeSignature = 0;
+	if (parameters.length) help.activeParameter = Math.max(0, Math.min(active, parameters.length - 1));
+	return help;
+}
+
+// The call's own parameters: a project function's list, or an intrinsic's from the
+// language's tables, found the same way hover and Ctrl-click find the name.
+async function signatureHelp(document, position, index) {
+	const call = callAt(document.lineAt(position.line).text.slice(0, position.character));
+	if (!call) return undefined;
+
+	const matches = await resolve(
+		document,
+		index,
+		index.forDocument(document),
+		importsOf(document.getText()),
+		{ name: call.name, receiver: call.receiver, line: position.line }
+	);
+	return matches.length ? signatureOf(matches[0].symbol, call.active) : undefined;
 }
 
 // How long typing settles before a file is checked again.
@@ -422,6 +650,17 @@ function register(context) {
 		vscode.languages.registerDocumentSymbolProvider(SELECTOR, {
 			provideDocumentSymbols: (document) => outline(document, index),
 		}),
+		vscode.languages.registerCompletionItemProvider(
+			SELECTOR,
+			{ provideCompletionItems: (document, position) => complete(document, position, index) },
+			"."
+		),
+		vscode.languages.registerSignatureHelpProvider(
+			SELECTOR,
+			{ provideSignatureHelp: (document, position) => signatureHelp(document, position, index) },
+			"(",
+			","
+		),
 		vscode.workspace.onDidChangeTextDocument((event) => index.forget(event.document.uri)),
 		vscode.workspace.onDidSaveTextDocument(() => index.forgetWorkspace()),
 		vscode.workspace.onDidCreateFiles(() => index.forgetWorkspace()),

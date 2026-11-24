@@ -116,6 +116,9 @@ function inLiteral(text, line, character) {
 	const lines = text.split(/\r?\n/);
 	for (const token of tokenize(lines[line] || "", line)) {
 		if (token.type !== "string" && token.type !== "comment") continue;
+		// A comment runs to the end of its line, so the cursor after its last word is
+		// still in it.
+		if (token.type === "comment" && character >= token.start) return true;
 		if (character >= token.start && character < Math.max(token.end, token.start + 1)) {
 			return true;
 		}

@@ -216,6 +216,7 @@ test("a name given two kinds of value has no one type", () => {
 test("a name inside a string or a comment is not a reference", () => {
 	const text = ["// call add later", "print \"add\""].join("\n");
 	assert.equal(inLiteral(text, 0, 8), true);
+	assert.equal(inLiteral(text, 0, 16), true, "the end of a comment is still in it");
 	assert.equal(inLiteral(text, 1, 8), true);
 	assert.equal(inLiteral(text, 1, 0), false);
 });
