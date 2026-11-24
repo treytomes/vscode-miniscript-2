@@ -863,6 +863,77 @@ test("a notebook cell is colored the same way", async () => {
 	assert.equal(kindOf(tokens, 3, 6), "function");
 });
 
+// `self` and `super` name the class the enclosing method was defined on, not a map, so a
+// method called through one resolves like any other method of that class.
+test("a method called through self has a tooltip and a jump", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"Shape.show = function",
+			"\tprint self.degrees(2)",
+			"end function",
+		].join("\n")
+	);
+
+	const hover = await opened.hover.provideHover(doc, { line: 5, character: 13 });
+	assert.match(hover.contents.value, /Shape\.degrees\(times=1\)/);
+	assert.match(hover.contents.value, /method/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 5, character: 13 });
+	assert.equal(locations.length, 1);
+	assert.deepEqual(locations[0].range.start, { line: 1, character: 6 });
+});
+
+test("a method called through self keeps its parameters", async () => {
+	activate();
+	const doc = document(
+		[
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"Shape.show = function",
+			"\tprint self.degrees(",
+			"end function",
+		].join("\n")
+	);
+
+	const help = await helpAt(doc, 5, 20);
+	assert.equal(help.signatures[0].label, "Shape.degrees(times=1)");
+	assert.deepEqual(
+		help.signatures[0].parameters.map((parameter) => parameter.label),
+		["times=1"]
+	);
+	assert.equal(help.activeParameter, 0);
+});
+
+test("self reaches its class even when a top-level name is spelled the same", async () => {
+	activate();
+	const doc = document(
+		[
+			"degrees = 0",
+			'Shape = {"sides": 4}',
+			"Shape.degrees = function(times=1)",
+			"\treturn times * 45",
+			"end function",
+			"Shape.show = function",
+			"\treturn self.degrees(2)",
+			"end function",
+		].join("\n")
+	);
+
+	const hover = await opened.hover.provideHover(doc, { line: 6, character: 13 });
+	assert.match(hover.contents.value, /Shape\.degrees\(times=1\)/);
+	assert.doesNotMatch(hover.contents.value, /degrees = 0/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 6, character: 13 });
+	assert.deepEqual(locations[0].range.start, { line: 2, character: 6 });
+});
+
 test("Find All References finds the uses of a name in the file", async () => {
 	activate();
 	const doc = document(

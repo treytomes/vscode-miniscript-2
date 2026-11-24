@@ -157,7 +157,9 @@ MiniScript's own names — `print`, `s.len`, `xs.push(value)`, `file.readLines(p
 documented from the language's tables, and get no Ctrl-click: there is no line to jump to.
 A member's type is read from the value the receiver was given, so `s = "text"` makes
 `s.len` the string's; when the value does not say, every type that has that member is
-listed.
+listed. `self.name` and `super.name` are the exception that needs no type: inside a method
+they reach the class the method belongs to, so a method called through `self` gets that
+method's tooltip, its jump and its parameters.
 
 **The Outline** (and the breadcrumb above the editor) lists the file's functions,
 methods, classes and top-level variables, with a method under its class and a nested

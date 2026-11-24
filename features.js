@@ -67,6 +67,19 @@ function qualifier(receiver) {
 	return receiver === "globals" || SCOPES.has(receiver) ? undefined : receiver;
 }
 
+// The innermost method whose body holds this line: the class `self` and `super` reach from
+// here. A plain function nested inside a method has no receiver, so it is skipped.
+function enclosingMethod(symbols, line) {
+	const owners = symbols.filter(
+		(symbol) =>
+			FUNCTION_KINDS.has(symbol.kind) &&
+			symbol.receiver &&
+			symbol.line <= line &&
+			(symbol.endLine === undefined || symbol.endLine >= line)
+	);
+	return owners[owners.length - 1];
+}
+
 function receiverBefore(before) {
 	const match = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*$/.exec(before);
 	return match ? match[1] : undefined;
@@ -260,6 +273,18 @@ function builtinMember(name, receiver, variants) {
 // the receiver is an import of, then an intrinsic of the receiver's type, then a method of
 // that name anywhere in the workspace.
 async function method(document, index, here, imports, { name, receiver, line }) {
+	// `self` and `super` name the class the enclosing method belongs to, so that class's
+	// method is the answer - the same one completion gives, and the only one that can be
+	// right when a top-level name is spelled the same as the method.
+	if (receiver === "self" || receiver === "super") {
+		const owner = enclosingMethod(here, line);
+		const own =
+			owner && owner.receiver
+				? locate(here, { name, receiver: owner.receiver, line })
+				: undefined;
+		if (own) return [{ uri: document.uri, symbol: own }];
+	}
+
 	const known = qualifier(receiver);
 
 	const own =
@@ -443,14 +468,7 @@ function memberOf(symbols, tokens, index, line, target) {
 	if (!receiver) return false;
 	if (receiver.value === target.receiver) return true;
 	if (receiver.value !== "self" && receiver.value !== "super") return false;
-	const owners = symbols.filter(
-		(symbol) =>
-			FUNCTION_KINDS.has(symbol.kind) &&
-			symbol.receiver &&
-			symbol.line <= line &&
-			(symbol.endLine === undefined || symbol.endLine >= line)
-	);
-	const owner = owners[owners.length - 1];
+	const owner = enclosingMethod(symbols, line);
 	return Boolean(owner) && owner.receiver === target.receiver;
 }
 
@@ -780,14 +798,7 @@ function memberKind(symbols, tokens, index, line) {
 	if (!receiver || receiver.type !== "word") return undefined;
 	const found = locate(symbols, { name: token.value, line });
 	if (receiver.value === "self" || receiver.value === "super") {
-		const owners = symbols.filter(
-			(symbol) =>
-				FUNCTION_KINDS.has(symbol.kind) &&
-				symbol.receiver &&
-				symbol.line <= line &&
-				(symbol.endLine === undefined || symbol.endLine >= line)
-		);
-		const owner = owners[owners.length - 1];
+		const owner = enclosingMethod(symbols, line);
 		return owner && found && found.receiver === owner.receiver ? "method" : undefined;
 	}
 	if (found && found.kind === "method" && found.receiver === receiver.value) return "method";
