@@ -17,8 +17,9 @@ suite in the Testing panel.
   keeps its state between selections, which **MiniScript REPL** opens on its own.
 - **Tooltips, Ctrl-click and the Outline** — hover a function for its docstring or an
   intrinsic like `print` for what it does, Ctrl-click a name to jump to where it is
-  defined, and read the file's functions, methods and classes in the Outline view. See
-  below.
+  defined, Find All References and Rename a local, Go to Symbol in Workspace, and read the
+  file's functions, methods and classes in the Outline view. An `import`'s path is a link
+  to its module. See below.
 - **Squiggles before the run** — a member no type has, a block that never closes, and an
   `import` that names no file are marked as you type, with a "did you mean" for the
   first. See below.
@@ -172,10 +173,19 @@ count = 0                   // a variable
 ```
 
 `import "knowledge"` makes `knowledge` a name for `knowledge.ms`: hovering or
-Ctrl-clicking `knowledge.loadFacts` reads that file, and Ctrl-clicking the string on the
-`import` line opens it. A name found in neither this file nor an imported module is
-looked for in the workspace's other `.ms` files, and Ctrl-click lists every file that
-defines it.
+Ctrl-clicking `knowledge.loadFacts` reads that file, and the path itself is a link that
+opens it. A name found in neither this file nor an imported module is looked for in the
+workspace's other `.ms` files, and Ctrl-click lists every file that defines it.
+
+**Find All References** (`Shift+F12`) lists every place in the file the name under the
+cursor is written — the declaration too, when the editor asks for it — and **Rename**
+(`F2`) rewrites them. Rename is offered for a local or a parameter and for nothing else: a
+name at the file's top level can be used from files this one has not read, and rewriting
+only the uses it can see would be a quiet mistake.
+
+**Go to Symbol in Workspace** (`Ctrl+T`) searches every `.ms` file for the functions,
+methods, classes and top-level variables the name contains; locals and parameters are
+left out, since a file does not offer them to the project.
 
 ## Squiggles before the run
 

@@ -412,6 +412,143 @@ function outline(document, index) {
 	return roots;
 }
 
+// Every place in the file a symbol is written: its own name where it is declared, when the
+// editor asked for that, and every use the scan reads as the same symbol - a member only
+// through the receiver the file gave it, so `x` in one function is not `x` in another.
+function rangesOf(document, symbols, target, includeDeclaration) {
+	const lines = document.getText().split(/\r?\n/);
+	const ranges = [];
+	for (let line = 0; line < lines.length; line += 1) {
+		const tokens = tokenize(lines[line], line);
+		for (let i = 0; i < tokens.length; i += 1) {
+			const token = tokens[i];
+			if (token.type !== "word" || token.value !== target.name) continue;
+			const declaration = line === target.line && token.start === target.character;
+			if (declaration && !includeDeclaration) continue;
+			if (i > 0 && tokens[i - 1].value === "." && !memberOf(symbols, tokens, i, line, target)) {
+				continue;
+			}
+			if (locate(symbols, { name: target.name, line }) !== target) continue;
+			ranges.push(new vscode.Range(line, token.start, line, token.end));
+		}
+	}
+	return ranges;
+}
+
+// Whether `receiver.name` is this method: the receiver it was defined on, or `self` and
+// `super` inside that class.
+function memberOf(symbols, tokens, index, line, target) {
+	if (target.kind !== "method" || !target.receiver) return false;
+	const receiver = tokens[index - 2];
+	if (!receiver) return false;
+	if (receiver.value === target.receiver) return true;
+	if (receiver.value !== "self" && receiver.value !== "super") return false;
+	const owners = symbols.filter(
+		(symbol) =>
+			FUNCTION_KINDS.has(symbol.kind) &&
+			symbol.receiver &&
+			symbol.line <= line &&
+			(symbol.endLine === undefined || symbol.endLine >= line)
+	);
+	const owner = owners[owners.length - 1];
+	return Boolean(owner) && owner.receiver === target.receiver;
+}
+
+// Every place the name under the cursor is written in this file. A name the file does not
+// define has no references here; the workspace's own would need every file read.
+function references(document, position, index, includeDeclaration) {
+	const text = document.getText();
+	if (inLiteral(text, position.line, position.character)) return [];
+	const range = document.getWordRangeAtPosition(position, WORD);
+	if (!range) return [];
+	const name = document.getText(range);
+	if (KEYWORDS.has(name)) return [];
+	const symbols = index.forDocument(document);
+	const target = locate(symbols, { name, line: position.line });
+	if (!target) return [];
+	return rangesOf(document, symbols, target, includeDeclaration).map(
+		(found) => new vscode.Location(document.uri, found)
+	);
+}
+
+// A rename is offered for a local or a parameter, and for nothing else: a top-level name
+// can be used from files this file has not read, and rewriting only the ones it can see
+// would be a quiet mistake.
+function localAt(document, position, index) {
+	const text = document.getText();
+	if (inLiteral(text, position.line, position.character)) return undefined;
+	const range = document.getWordRangeAtPosition(position, WORD);
+	if (!range) return undefined;
+	const name = document.getText(range);
+	const symbols = index.forDocument(document);
+	const target = locate(symbols, { name, line: position.line });
+	if (!target || !target.container) return undefined;
+	return { name, range, symbols, target };
+}
+
+function prepareRename(document, position, index) {
+	const local = localAt(document, position, index);
+	return local ? { range: local.range, placeholder: local.name } : undefined;
+}
+
+function rename(document, position, newName, index) {
+	if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(newName)) return undefined;
+	const local = localAt(document, position, index);
+	if (!local) return undefined;
+	const edit = new vscode.WorkspaceEdit();
+	for (const found of rangesOf(document, local.symbols, local.target, true)) {
+		edit.replace(document.uri, found, newName);
+	}
+	return edit;
+}
+
+// What Go to Symbol in Workspace searches: the names a file offers the rest of the
+// project, not its locals. A query is matched against the name alone, as the panel's
+// own search does.
+const SYMBOL_LIMIT = 100;
+
+async function workspaceSymbols(query, index) {
+	const search = String(query || "").toLowerCase();
+	if (!search) return [];
+	const found = [];
+	const uris = await vscode.workspace.findFiles("**/*.ms", "**/node_modules/**", 500);
+	for (const uri of uris) {
+		for (const symbol of await index.forUri(uri)) {
+			if (symbol.kind === "parameter" || symbol.container) continue;
+			if (!symbol.name.toLowerCase().includes(search)) continue;
+			found.push(
+				new vscode.SymbolInformation(
+					symbol.name,
+					KINDS[symbol.kind] || vscode.SymbolKind.Variable,
+					symbol.container || "",
+					new vscode.Location(uri, nameRange(symbol))
+				)
+			);
+			if (found.length >= SYMBOL_LIMIT) return found;
+		}
+	}
+	return found;
+}
+
+// The path in `import "..."` opens the module it names, when the workspace has one.
+async function documentLinks(document, index) {
+	const links = [];
+	const lines = document.getText().split(/\r?\n/);
+	for (let line = 0; line < lines.length; line += 1) {
+		const target = importOf(lines[line]);
+		if (!target) continue;
+		const uri = await index.moduleUri(target.path);
+		if (!uri) continue;
+		const link = new vscode.DocumentLink(
+			new vscode.Range(line, target.start, line, target.end),
+			uri
+		);
+		link.tooltip = `Open ${target.path}.ms`;
+		links.push(link);
+	}
+	return links;
+}
+
 function symbolItem(symbol) {
 	const item = new vscode.CompletionItem(
 		symbol.name,
@@ -787,6 +924,21 @@ function register(context) {
 		}),
 		vscode.languages.registerDocumentSymbolProvider(SELECTOR, {
 			provideDocumentSymbols: (document) => outline(document, index),
+		}),
+		vscode.languages.registerReferenceProvider(SELECTOR, {
+			provideReferences: (document, position, context) =>
+				references(document, position, index, Boolean(context && context.includeDeclaration)),
+		}),
+		vscode.languages.registerRenameProvider(SELECTOR, {
+			prepareRename: (document, position) => prepareRename(document, position, index),
+			provideRenameEdits: (document, position, newName) =>
+				rename(document, position, newName, index),
+		}),
+		vscode.languages.registerWorkspaceSymbolProvider({
+			provideWorkspaceSymbols: (query) => workspaceSymbols(query, index),
+		}),
+		vscode.languages.registerDocumentLinkProvider(SELECTOR, {
+			provideDocumentLinks: (document) => documentLinks(document, index),
 		}),
 		vscode.languages.registerCompletionItemProvider(
 			SELECTOR,

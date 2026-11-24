@@ -21,6 +21,10 @@ const opened = {
 		actions: undefined,
 		tokens: undefined,
 		legend: undefined,
+		references: undefined,
+		rename: undefined,
+		workspaceSymbols: undefined,
+		links: undefined,
 		completion: undefined,
 	signature: undefined,
 	triggers: {},
@@ -125,6 +129,16 @@ const vscode = {
 			Object.assign(this, { uri, range });
 		}
 	},
+	SymbolInformation: class {
+		constructor(name, kind, containerName, location) {
+			Object.assign(this, { name, kind, containerName, location });
+		}
+	},
+	DocumentLink: class {
+		constructor(range, target) {
+			Object.assign(this, { range, target });
+		}
+	},
 	DocumentSymbol: class {
 		constructor(name, detail, kind, range, selectionRange) {
 			Object.assign(this, { name, detail, kind, range, selectionRange });
@@ -177,6 +191,22 @@ const vscode = {
 			opened.actions = provider;
 			return disposable();
 		},
+		registerReferenceProvider: (selector, provider) => {
+			opened.references = provider;
+			return disposable();
+		},
+		registerRenameProvider: (selector, provider) => {
+			opened.rename = provider;
+			return disposable();
+		},
+		registerWorkspaceSymbolProvider: (provider) => {
+			opened.workspaceSymbols = provider;
+			return disposable();
+		},
+		registerDocumentLinkProvider: (selector, provider) => {
+			opened.links = provider;
+			return disposable();
+		},
 		registerDocumentSemanticTokensProvider: (selector, provider, legend) => {
 			opened.tokens = provider;
 			opened.legend = legend;
@@ -187,11 +217,19 @@ const vscode = {
 		workspaceFolders: [{ uri: { fsPath: "/work" } }],
 		textDocuments: [],
 		findFiles: async (pattern) => {
+			// Either one module by name (`**/lib.ms`) or every file (`**/*.ms`).
+			const every = /^\*\*\/\*\.ms$/.test(pattern);
 			const match = /^\*\*\/(.+)\.ms$/.exec(pattern);
 			const name = match ? match[1] : undefined;
-			return opened.files.has(name)
-				? [{ fsPath: `/work/${name}.ms`, toString: () => `file:///work/${name}.ms` }]
-				: [];
+			const wanted = every
+				? [...opened.files]
+				: name && opened.files.has(name)
+					? [name]
+					: [];
+			return wanted.map((found) => ({
+				fsPath: `/work/${found}.ms`,
+				toString: () => `file:///work/${found}.ms`,
+			}));
 		},
 		fs: { readFile: async (uri) => Buffer.from(opened.modules.get(uri.fsPath) || "") },
 		onDidOpenTextDocument: (handler) => remember("onDidOpenTextDocument", handler),
@@ -823,6 +861,129 @@ test("a notebook cell is colored the same way", async () => {
 	assert.equal(kindOf(tokens, 1, 8), "parameter");
 	assert.equal(kindOf(tokens, 3, 0), "intrinsic");
 	assert.equal(kindOf(tokens, 3, 6), "function");
+});
+
+test("Find All References finds the uses of a name in the file", async () => {
+	activate();
+	const doc = document(
+		[
+			"add = function(a, b=2)",
+			"\treturn a + b",
+			"end function",
+			"print add(1)",
+			"other = function()",
+			"\treturn add(2)",
+			"end function",
+		].join("\n")
+	);
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 3, character: 6 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		found.map((location) => [location.uri === doc.uri, location.range.start.line, location.range.start.character]),
+		[
+			[true, 0, 0],
+			[true, 3, 6],
+			[true, 5, 8],
+		]
+	);
+
+	const uses = await opened.references.provideReferences(
+		doc,
+		{ line: 3, character: 6 },
+		{ includeDeclaration: false }
+	);
+	assert.equal(uses.length, 2, "the declaration is left out when not asked for");
+});
+
+test("a local's uses are its own, not another function's", async () => {
+	activate();
+	const doc = document(
+		[
+			"f = function(x)",
+			"\ty = x + 1",
+			"\treturn x + y",
+			"end function",
+			"g = function(x)",
+			"\treturn x",
+			"end function",
+		].join("\n")
+	);
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 1, character: 5 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		found.map((location) => [location.range.start.line, location.range.start.character]),
+		[
+			[0, 13],
+			[1, 5],
+			[2, 8],
+		]
+	);
+});
+
+test("a local can be renamed, and a top-level name cannot", async () => {
+	activate();
+	const doc = document(
+		["f = function(x)", "\ty = x + 1", "\treturn x", "end function"].join("\n")
+	);
+
+	const prepared = opened.rename.prepareRename(doc, { line: 1, character: 5 });
+	assert.equal(prepared.placeholder, "x");
+	assert.deepEqual(prepared.range.start, { line: 1, character: 5 });
+
+	const edit = await opened.rename.provideRenameEdits(doc, { line: 1, character: 5 }, "count");
+	assert.deepEqual(
+		edit.edits.map((entry) => [entry.range.start.line, entry.range.start.character, entry.text]),
+		[
+			[0, 13, "count"],
+			[1, 5, "count"],
+			[2, 8, "count"],
+		]
+	);
+
+	assert.equal(
+		opened.rename.prepareRename(doc, { line: 0, character: 0 }),
+		undefined,
+		"a top-level function is used from files this one has not read"
+	);
+});
+
+test("Go to Symbol in Workspace finds a name in another file", async () => {
+	opened.files.add("lib");
+	opened.modules.set(
+		"/work/lib.ms",
+		["helper = function(x)", "\treturn x", "end function", "value = 1"].join("\n")
+	);
+	activate();
+
+	const found = await opened.workspaceSymbols.provideWorkspaceSymbols("hel");
+	assert.equal(found.length, 1);
+	assert.equal(found[0].name, "helper");
+	assert.equal(found[0].kind, vscode.SymbolKind.Function);
+	assert.equal(found[0].location.uri.fsPath, "/work/lib.ms");
+	assert.deepEqual(found[0].location.range.start, { line: 0, character: 0 });
+
+	assert.deepEqual(await opened.workspaceSymbols.provideWorkspaceSymbols(""), []);
+});
+
+test("the path in an import is a link to the module", async () => {
+	opened.files.add("found");
+	activate();
+	const doc = document('import "found"\nimport "missing"');
+
+	const links = await opened.links.provideDocumentLinks(doc);
+	assert.equal(links.length, 1);
+	assert.deepEqual([links[0].range.start.line, links[0].range.start.character], [0, 8]);
+	assert.equal(links[0].range.end.character, 13);
+	assert.equal(links[0].target.fsPath, "/work/found.ms");
+	assert.equal(links[0].tooltip, "Open found.ms");
 });
 
 test("a name in a string or a comment keeps the grammar's color", async () => {
