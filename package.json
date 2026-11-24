@@ -12,7 +12,8 @@
   },
   "main": "./extension.js",
   "scripts": {
-    "test": "node --test"
+    "test": "node --test",
+    "test:editor": "node e2e/run.js"
   },
   "engines": {
     "vscode": "^1.75.0"
@@ -151,5 +152,9 @@
         }
       }
     }
+  },
+  "devDependencies": {
+    "@vscode/test-electron": "^3.1.0",
+    "mocha": "^12.0.3"
   }
 }

@@ -1,4 +1,6 @@
 .vscode/**
+.vscode-test/**
+e2e/**
 test/**
 out/**
 *.vsix

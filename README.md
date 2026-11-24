@@ -376,8 +376,10 @@ Linux lives on the [MiniScript 2 releases page](https://github.com/JoeStrout/min
 
 ## Development
 
-There is no build step and no dependency: `extension.js` and `testing.js` are plain
-CommonJS, and VS Code supplies its own `vscode` module.
+There is no build step and nothing shipped depends on a package: `extension.js` and
+`testing.js` are plain CommonJS, and VS Code supplies its own `vscode` module. The editor
+test is the only thing with dependencies — `npm install` installs `@vscode/test-electron`
+and `mocha`, and the packaged extension does not include them.
 
 - Open this folder in VS Code and press `F5`; the checked-in `.vscode/launch.json` starts
   an Extension Development Host with this folder as the development extension.
@@ -387,6 +389,12 @@ CommonJS, and VS Code supplies its own `vscode` module.
   controller against a stub `vscode`, and its cell protocol against the real interpreter.
   Those tests skip when `../3rd-party` has no interpreter and `MINISCRIPT_EXE_PATH` is
   unset.
+- `npm run test:editor` launches a real VS Code with this folder as the development
+  extension and `e2e/fixtures` as the workspace, then checks one hover, one completion, one
+  diagnostic and one semantic token through the editor's own commands — the wiring
+  `npm test` cannot see, since it stubs `vscode`. It needs a display (on a headless machine,
+  `xvfb-run -a npm run test:editor`) and downloads VS Code once into `.vscode-test/`. The
+  workflow in `.github/workflows/tests.yml` runs both suites on every push and pull request.
 - `symbols.js` reads a file into symbols (nothing in it requires `vscode`); `builtins.js`
   is the table of intrinsic functions and methods; `lint.js` finds the problems those two
   can see without running the file; `features.js` turns them into the hover, definition,
