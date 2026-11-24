@@ -252,17 +252,31 @@ function register(context, { resolveInterpreter }) {
 		group.byName = byName;
 	}
 
-	// The checks live in the project's `.ms` files, so a save, an addition or a deletion
-	// anywhere in the folder may change the suite's list. The panel asks again once the
-	// editing settles, instead of waiting for the window to be reloaded.
+	// The checks live in the suite and in the case modules it reports; a save to any other
+	// program cannot change the list, so it is none of the panel's business. The panel asks
+	// again once the editing settles, instead of waiting for the window to be reloaded.
 	const waiting = new Map();
+
+	function relevant(group, changed) {
+		if (!changed) return false;
+		const file = path.normalize(changed);
+		if (file === path.normalize(group.suite)) return true;
+		for (const key of group.files.keys()) {
+			if (path.isAbsolute(key) && path.normalize(key) === file) return true;
+		}
+		return false;
+	}
 
 	function watch(folder) {
 		const watcher = vscode.workspace.createFileSystemWatcher(
 			new vscode.RelativePattern(folder, "**/*.ms")
 		);
-		const touched = () => {
+		const touched = (uri) => {
 			const key = folder.uri.fsPath;
+			const group = groups.get(key);
+			if (!group || !relevant(group, uri && uri.fsPath)) return;
+			// A run owns the interpreter; a save during one is left for the next save.
+			if (group.running) return;
 			const timer = waiting.get(key);
 			if (timer) clearTimeout(timer);
 			waiting.set(
@@ -270,7 +284,7 @@ function register(context, { resolveInterpreter }) {
 				setTimeout(() => {
 					waiting.delete(key);
 					const group = groups.get(key);
-					if (group) fill(group);
+					if (group && !group.running) fill(group);
 				}, REFRESH)
 			);
 		};
@@ -385,6 +399,16 @@ function register(context, { resolveInterpreter }) {
 	}
 
 	async function runGroup(run, target, token) {
+		const { group } = target;
+		group.running = true;
+		try {
+			await runSuite(run, target, token);
+		} finally {
+			group.running = false;
+		}
+	}
+
+	async function runSuite(run, target, token) {
 		const { group } = target;
 		const interpreter = resolveInterpreter(group.folder.uri.fsPath);
 		if (interpreter.problem) {

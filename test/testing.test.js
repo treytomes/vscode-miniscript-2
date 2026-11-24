@@ -28,11 +28,11 @@ after(() => {
 });
 
 // A string in MiniScript has no backslash escapes: a quote inside one is doubled.
-function record(name, line) {
+function record(name, line, file) {
 	const text = `##TEST ${JSON.stringify({
 		name,
 		status: "pass",
-		file: path.basename(suitePath),
+		file: file || path.basename(suitePath),
 		line,
 	})}`;
 	return `print "${text.replace(/"/g, '""')}"`;
@@ -44,7 +44,7 @@ function writeSuiteWith(checks, end) {
 	const last = checks.reduce((most, check) => Math.max(most, check.line), 0);
 	const lines = [];
 	for (let n = 1; n <= last; n += 1) lines.push("// filler");
-	for (const check of checks) lines[check.line - 1] = record(check.name, check.line);
+	for (const check of checks) lines[check.line - 1] = record(check.name, check.line, check.file);
 	const totals = JSON.stringify(end || { passed: checks.length, failed: 0, skipped: 0 });
 	lines.push(`print "##END ${totals.replace(/"/g, '""')}"`);
 	fs.writeFileSync(suitePath, `${lines.join("\n")}\n`);
@@ -174,6 +174,15 @@ Module._load = function (request, ...rest) {
 	return load.call(this, request, ...rest);
 };
 
+// Every suite process the panel starts, so a test can tell a rediscovery from a run.
+const childProcess = require("child_process");
+const realSpawn = childProcess.spawn;
+let spawns = 0;
+childProcess.spawn = (...args) => {
+	spawns += 1;
+	return realSpawn(...args);
+};
+
 const { register } = require("../testing.js");
 
 const token = {
@@ -183,6 +192,7 @@ const token = {
 
 function panel() {
 	watchers.length = 0;
+	spawns = 0;
 	return register(
 		{ subscriptions: [] },
 		{ resolveInterpreter: () => ({ command: interpreter }) }
@@ -191,7 +201,7 @@ function panel() {
 
 function items(controller) {
 	const root = [...controller.items.children][0];
-	return [...[...root.children][0].children];
+	return [...root.children].flatMap((fileItem) => [...fileItem.children]);
 }
 
 async function discover(controller) {
@@ -214,9 +224,9 @@ async function until(done, timeout = 5000) {
 	return false;
 }
 
-// The save the watcher would see: a `.ms` file in the suite's folder changed.
-function touched() {
-	for (const handler of watchers[0].handlers.change) handler({});
+// The save the watcher would see: one of the folder's `.ms` files changed.
+function touched(file = suitePath) {
+	for (const handler of watchers[0].handlers.change) handler({ fsPath: file });
 }
 
 function run(controller, include) {
@@ -311,6 +321,42 @@ test("a check moved by an edit follows to its new line", { skip }, async () => {
 	const after = items(panelUnderTest);
 	assert.equal(after[0], before[0], "the same item, with its last result still on it");
 	assert.equal(after[1].range.startLine, 9);
+});
+
+test("a save outside the suite's own files runs nothing", { skip }, async () => {
+	fs.writeFileSync(path.join(workspaceDir, "case.ms"), "// filler\n// filler\nprint 1\n");
+	fs.writeFileSync(path.join(workspaceDir, "other.ms"), "print 1\n");
+	writeSuiteWith([
+		{ name: "first", line: 4 },
+		{ name: "module", line: 3, file: "case.ms" },
+	]);
+
+	const panelUnderTest = panel();
+	assert.equal((await discover(panelUnderTest)).length, 2);
+	assert.equal(spawns, 1, "one discovery");
+
+	touched(path.join(workspaceDir, "other.ms"));
+	await wait(500);
+	assert.equal(spawns, 1, "another program cannot change the suite's list");
+
+	touched(path.join(workspaceDir, "case.ms"));
+	assert.ok(await until(() => spawns === 2), "a case module the suite reports is heard");
+});
+
+test("a save during a run starts no second discovery", { skip }, async () => {
+	writeSuite(4, 5);
+	const panelUnderTest = panel();
+	await discover(panelUnderTest);
+	assert.equal(spawns, 1);
+
+	const running = run(panelUnderTest, undefined);
+	touched(suitePath);
+	await running;
+	await wait(500);
+	assert.equal(spawns, 2, "the run's own process, and no discovery beside it");
+
+	touched(suitePath);
+	assert.ok(await until(() => spawns === 3), "the next save is heard");
 });
 
 test("the suite's skipped total is shown with the run", { skip }, async () => {
