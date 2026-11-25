@@ -1514,6 +1514,51 @@ test("rename leaves an importer's own name for the alias alone", async () => {
 	);
 });
 
+// The alias is a name like any other for the tooltip and the popup too: a function that
+// gives it its own instance reads the member through that instance.
+const SCOPED = [
+	'import "gauge"',
+	'Scale = {"factor": 2}',
+	"Scale.helper = function(x)",
+	"\treturn x * self.factor",
+	"end function",
+	"read = function",
+	"\tgauge = new Scale",
+	"\treturn gauge.helper(",
+	"end function",
+].join("\n");
+
+test("a shadowed alias resolves as the file's own instance", async () => {
+	project({ gauge: LIB, bias: SCOPED });
+	activate();
+	const doc = document(SCOPED, "bias");
+
+	const hover = await opened.hover.provideHover(doc, { line: 7, character: 16 });
+	assert.match(hover.contents.value, /Scale\.helper\(x\)/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 7, character: 16 });
+	assert.equal(locations[0].uri, doc.uri, "the file's own method, not the module's");
+	assert.deepEqual(locations[0].range.start, { line: 2, character: 6 });
+
+	const help = await helpAt(doc, 7, 21);
+	assert.equal(help.signatures[0].label, "Scale.helper(x)");
+});
+
+test("completion and the path link resolve a relative import beside the file", async () => {
+	const rel = ['import "../sizes"', "print sizes."].join("\n");
+	project({ sizes: LIB, "pane/rel": rel });
+	activate();
+	const doc = document(rel, "pane/rel");
+
+	const members = labels(await completionAt(doc, 1, 12));
+	assert.deepEqual(members.sort(), ["helper"], "the module's own names, through the path's alias");
+
+	const links = await opened.links.provideDocumentLinks(doc);
+	assert.equal(links.length, 1);
+	assert.equal(links[0].target.fsPath, "/work/sizes.ms");
+	assert.equal(links[0].tooltip, "Open ../sizes.ms");
+});
+
 test("a problem with no certain repair offers no fix", async () => {
 	const collection = activate();
 	const doc = document("end");

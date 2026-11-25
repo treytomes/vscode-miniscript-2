@@ -181,7 +181,8 @@ count = 0                   // a variable
 Ctrl-clicking `knowledge.loadFacts` reads that file, and the path itself is a link that
 opens it. Find All References and Rename follow it into that file too. An `import` written
 as a path — `import "../sizes"` — is read the same way, resolved from the importing file,
-so `sizes.helper` hovers, jumps and lists its uses as a module name's alias does. A name found in
+so `sizes.helper` hovers, jumps, completes after the dot and lists its uses as a module
+name's alias does, and the path itself is a link to the file it names. A name found in
 neither this file nor an imported module is looked for in the workspace's other `.ms`
 files, and Ctrl-click lists every file that defines it.
 
@@ -198,7 +199,10 @@ the module's own declaration and uses together with every `alias.loadFacts` in t
 that import it, and Rename rewrites all of them. A file's own `loadFacts` is a different
 name and is left alone, and so is an alias an importing file gives its own meaning — a
 top-level `knowledge`, or a local in the function being written — since `knowledge.loadFacts`
-there is that name's member, not the module's. Rename is offered for a local or a parameter anywhere, and for a
+there is that name's member, not the module's. Hover, Ctrl-click and signature help read a
+shadowed alias the same way: a method called through the file's own `gauge` gets that
+receiver's method, not the module's.
+ Rename is offered for a local or a parameter anywhere, and for a
 name at a file's top level only when something in the workspace imports that file: a module
 nothing here imports could still be read by a file outside the workspace, and rewriting
 only the uses the editor can see would be a quiet mistake. A member access is never renamed

@@ -381,7 +381,9 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 	if (own) return [{ uri: document.uri, symbol: own }];
 
 	if (known) {
-		const target = imports.get(known);
+		// The module the alias names, unless this file has given that alias its own meaning at
+		// this line: then the receiver is the file's own name and the member is its member.
+		const target = aliasShadows(here, known, line) ? undefined : imports.get(known);
 		if (target) {
 			const uri = await index.target(document.uri, target);
 			const found = uri && locate(await index.forUri(uri), { name, line: 0 });
@@ -811,7 +813,7 @@ async function documentLinks(document, index) {
 	for (let line = 0; line < lines.length; line += 1) {
 		const target = importOf(lines[line]);
 		if (!target) continue;
-		const uri = await index.moduleUri(target.path);
+		const uri = await index.target(document.uri, target.path);
 		if (!uri) continue;
 		const link = new vscode.DocumentLink(
 			new vscode.Range(line, target.start, line, target.end),
@@ -878,7 +880,7 @@ function scopeItems(here, line, imports) {
 // own names, and the intrinsic table's members for the receiver's type. A receiver the
 // file does not define may still name a module the language ships (`file`), which has
 // members of its own.
-async function memberItems(index, here, imports, receiver, line) {
+async function memberItems(index, from, here, imports, receiver, line) {
 	const items = [];
 	const seen = new Set();
 	const add = (item) => {
@@ -907,7 +909,7 @@ async function memberItems(index, here, imports, receiver, line) {
 	}
 
 	if (imports.has(receiver)) {
-		const uri = await index.moduleUri(imports.get(receiver));
+		const uri = await index.target(from, imports.get(receiver));
 		if (!uri) return items;
 		for (const symbol of await index.forUri(uri)) {
 			if (!symbol.container && !symbol.receiver) add(symbolItem(symbol));
@@ -947,7 +949,9 @@ async function complete(document, position, index) {
 	const here = index.forDocument(document);
 	const imports = importsOf(text);
 	const member = /([A-Za-z_][A-Za-z0-9_]*)\s*\.\s*([A-Za-z_][A-Za-z0-9_]*)?$/.exec(before);
-	if (member) return memberItems(index, here, imports, member[1], position.line);
+	if (member) {
+		return memberItems(index, document.uri, here, imports, member[1], position.line);
+	}
 	return scopeItems(here, position.line, imports);
 }
 
