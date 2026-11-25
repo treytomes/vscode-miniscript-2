@@ -1443,6 +1443,77 @@ test("an import written as a path is followed beside the file", async () => {
 	]);
 });
 
+test("a relative import is resolved for hover and Ctrl-click too", async () => {
+	const rel = ['import "../sizes"', "print sizes.helper(1)"].join("\n");
+	project({ sizes: LIB, "sub/rel": rel });
+	activate();
+	const doc = document(rel, "sub/rel");
+
+	const hover = await opened.hover.provideHover(doc, { line: 1, character: 14 });
+	assert.match(hover.contents.value, /helper\(x\)/);
+	assert.match(hover.contents.value, /sizes\.ms:1/);
+
+	const locations = await opened.definition.provideDefinition(doc, { line: 1, character: 14 });
+	assert.equal(locations.length, 1);
+	assert.equal(locations[0].uri.fsPath, "/work/sizes.ms");
+	assert.deepEqual(locations[0].range.start, { line: 0, character: 0 });
+
+	const path = await opened.definition.provideDefinition(doc, { line: 0, character: 12 });
+	assert.equal(path[0].uri.fsPath, "/work/sizes.ms", "the path itself opens the module");
+});
+
+// An alias is a name like any other: a file can give it its own meaning, and then
+// `gauge.helper` is that name's member rather than the imported module's.
+const SHADOW = [
+	'import "gauge"',
+	"read = function",
+	"\tgauge = {}",
+	"\treturn gauge.helper(1)",
+	"end function",
+	"print gauge.helper(2)",
+].join("\n");
+
+test("a local named like the alias is not a use of the imported name", async () => {
+	project({ gauge: LIB, meter: SHADOW });
+	activate();
+	const doc = document(SHADOW, "meter");
+
+	const found = await opened.references.provideReferences(
+		doc,
+		{ line: 5, character: 14 },
+		{ includeDeclaration: true }
+	);
+	assert.deepEqual(
+		places(found),
+		[
+			["/work/gauge.ms", 0, 0],
+			["/work/gauge.ms", 3, 6],
+			["/work/meter.ms", 5, 12],
+		],
+		"the function's own gauge is a different name"
+	);
+});
+
+test("rename leaves an importer's own name for the alias alone", async () => {
+	project({ gauge: LIB, meter: SHADOW });
+	activate();
+	const doc = document(LIB, "gauge");
+
+	const edit = await opened.rename.provideRenameEdits(doc, { line: 0, character: 1 }, "assist");
+	assert.deepEqual(
+		edit.edits.map((entry) => [
+			entry.uri.fsPath,
+			entry.range.start.line,
+			entry.range.start.character,
+		]),
+		[
+			["/work/gauge.ms", 0, 0],
+			["/work/gauge.ms", 3, 6],
+			["/work/meter.ms", 5, 12],
+		]
+	);
+});
+
 test("a problem with no certain repair offers no fix", async () => {
 	const collection = activate();
 	const doc = document("end");

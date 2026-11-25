@@ -383,7 +383,7 @@ async function method(document, index, here, imports, { name, receiver, line }) 
 	if (known) {
 		const target = imports.get(known);
 		if (target) {
-			const uri = await index.moduleUri(target);
+			const uri = await index.target(document.uri, target);
 			const found = uri && locate(await index.forUri(uri), { name, line: 0 });
 			if (found) return [{ uri, symbol: found }];
 		}
@@ -419,7 +419,7 @@ async function resolve(document, index, here, imports, { name, receiver, line })
 	if (symbol) return [{ uri: document.uri, symbol }];
 
 	if (imports.has(name)) {
-		const uri = await index.moduleUri(imports.get(name));
+		const uri = await index.target(document.uri, imports.get(name));
 		if (uri) return [{ uri, symbol: moduleSymbol(name, imports.get(name)) }];
 	}
 
@@ -435,7 +435,7 @@ async function find(document, position, index) {
 	if (inLiteral(text, position.line, position.character)) {
 		const target = importOf(document.lineAt(position.line).text);
 		if (!target) return [];
-		const uri = await index.moduleUri(target.path);
+		const uri = await index.target(document.uri, target.path);
 		return uri ? [{ uri, symbol: moduleSymbol(target.alias, target.path) }] : [];
 	}
 
@@ -559,12 +559,32 @@ function rangesOf(document, symbols, target, includeDeclaration) {
 	return rangesForText(document.getText(), symbols, target, includeDeclaration);
 }
 
+// Whether an importing file has given the alias a meaning of its own where it is written: a
+// name at the file's top level, or a local or parameter of a function that encloses the
+// line. In such a place `alias.name` is that name's member, not the imported module's.
+function aliasShadows(symbols, alias, line) {
+	return symbols.some((symbol) => {
+		if (symbol.name !== alias || symbol.receiver) return false;
+		if (!symbol.container) return true;
+		return symbols.some(
+			(owner) =>
+				owner.name === symbol.container &&
+				FUNCTION_KINDS.has(owner.kind) &&
+				owner.line <= line &&
+				(owner.endLine === undefined || owner.endLine >= line)
+		);
+	});
+}
+
 // Every `alias.name` in a file: the only way a file that imports a module writes one of
 // the module's own names, and never a bare local that happens to be spelled the same.
-function memberRanges(text, alias, name) {
+// A line that shadows the alias with its own name is skipped, since there the member is the
+// file's own and renaming it as the module's would rewrite the wrong name.
+function memberRanges(text, alias, name, symbols) {
 	const ranges = [];
 	const lines = text.split(/\r?\n/);
 	for (let line = 0; line < lines.length; line += 1) {
+		if (aliasShadows(symbols, alias, line)) continue;
 		const tokens = tokenize(lines[line], line);
 		for (let i = 2; i < tokens.length; i += 1) {
 			const token = tokens[i];
@@ -609,7 +629,7 @@ async function importersFor(index, moduleUri, current) {
 		importers.push({
 			uri: current.document.uri,
 			alias: current.alias,
-			source: { text: current.document.getText() },
+			source: { text: current.document.getText(), symbols: index.forDocument(current.document) },
 		});
 	}
 	return importers;
@@ -622,7 +642,12 @@ function moduleRanges(module, symbol, includeDeclaration, importers) {
 		(range) => ({ uri: module.uri, range })
 	);
 	for (const importer of importers) {
-		for (const range of memberRanges(importer.source.text, importer.alias, symbol.name)) {
+		for (const range of memberRanges(
+			importer.source.text,
+			importer.alias,
+			symbol.name,
+			importer.source.symbols
+		)) {
 			found.push({ uri: importer.uri, range });
 		}
 	}
