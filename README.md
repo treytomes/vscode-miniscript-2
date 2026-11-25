@@ -199,9 +199,10 @@ the module's own declaration and uses together with every `alias.loadFacts` in t
 that import it, and Rename rewrites all of them. A file's own `loadFacts` is a different
 name and is left alone, and so is an alias an importing file gives its own meaning — a
 top-level `knowledge`, or a local in the function being written — since `knowledge.loadFacts`
-there is that name's member, not the module's. Hover, Ctrl-click and signature help read a
-shadowed alias the same way: a method called through the file's own `gauge` gets that
-receiver's method, not the module's.
+there is that name's member, not the module's. Hover, Ctrl-click, signature help and
+completion after the dot read a shadowed alias the same way: a method called through the
+file's own `gauge` gets that receiver's method, not the module's, and `gauge.` completes
+that value's members.
  Rename is offered for a local or a parameter anywhere, and for a
 name at a file's top level only when something in the workspace imports that file: a module
 nothing here imports could still be read by a file outside the workspace, and rewriting

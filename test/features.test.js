@@ -1544,6 +1544,43 @@ test("a shadowed alias resolves as the file's own instance", async () => {
 	assert.equal(help.signatures[0].label, "Scale.helper(x)");
 });
 
+// `gauge.` asks what that `gauge` has, so where the function gave the alias its own value
+// the answer is that value's members; the same alias outside the function is the module.
+const OWNER = [
+	'import "gauge"',
+	'Scale = {"factor": 2}',
+	"Scale.helper = function(x)",
+	"\treturn x * self.factor",
+	"end function",
+	"read = function",
+	"\tgauge = new Scale",
+	"\tprint gauge.",
+	"end function",
+	"print gauge.",
+].join("\n");
+
+function gaugeModule() {
+	project({ gauge: [LIB, "value = 1"].join("\n"), owner: OWNER });
+	activate();
+	return document(OWNER, "owner");
+}
+
+test("completion after a shadowed alias offers that value's members", async () => {
+	const doc = gaugeModule();
+
+	const members = labels(await completionAt(doc, 7, 13));
+	assert.ok(members.includes("helper"), "the instance's own method");
+	assert.ok(members.includes("len"), "an instance is a map too");
+	assert.ok(!members.includes("value"), "not the module's names");
+});
+
+test("completion after the alias outside the function is still the module", async () => {
+	const doc = gaugeModule();
+
+	const members = labels(await completionAt(doc, 9, 13));
+	assert.deepEqual(members.sort(), ["helper", "value"]);
+});
+
 test("completion and the path link resolve a relative import beside the file", async () => {
 	const rel = ['import "../sizes"', "print sizes."].join("\n");
 	project({ sizes: LIB, "pane/rel": rel });

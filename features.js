@@ -908,7 +908,9 @@ async function memberItems(index, from, here, imports, receiver, line) {
 		return items;
 	}
 
-	if (imports.has(receiver)) {
+	// The module the alias names, unless this file has given that alias its own meaning at
+	// this line: then `receiver.` completes what the file's own name holds.
+	if (imports.has(receiver) && !aliasShadows(here, receiver, line)) {
 		const uri = await index.target(from, imports.get(receiver));
 		if (!uri) return items;
 		for (const symbol of await index.forUri(uri)) {
