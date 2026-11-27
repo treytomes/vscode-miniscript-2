@@ -8,6 +8,9 @@ suite in the Testing panel.
 
 - A TextMate grammar for MiniScript 2 (scope `source.miniscript`), registered for `.ms`
   files, with the aliases `MiniScript`, `MiniScript 2` and `miniscript`.
+- A TextMate grammar for GRFON (scope `source.grfon`), registered for `.grfon` files:
+  `//` comments (a url's `://` is not one), keys, escapes, numbers and `null`, `@name`
+  references, `?term` and `$.path`, with braces that match and `}` unindenting itself.
 - A language configuration, so `//` comments toggle, brackets match and auto-close, and
   `if` / `else` / `for` / `while` / `function` … `end` blocks indent themselves.
 - **Running** — **Run MiniScript File** (a play button, also on the Command Palette)
@@ -394,18 +397,21 @@ Linux lives on the [MiniScript 2 releases page](https://github.com/JoeStrout/min
 ## Development
 
 There is no build step and nothing shipped depends on a package: `extension.js` and
-`testing.js` are plain CommonJS, and VS Code supplies its own `vscode` module. The editor
-test is the only thing with dependencies — `npm install` installs `@vscode/test-electron`
-and `mocha`, and the packaged extension does not include them.
+`testing.js` are plain CommonJS, and VS Code supplies its own `vscode` module. The tests
+that need packages install them as devDependencies — `@vscode/test-electron` and `mocha`
+for the editor test, `vscode-textmate` and `vscode-oniguruma` for the grammar test — and
+the packaged extension does not include them.
 
 - Open this folder in VS Code and press `F5`; the checked-in `.vscode/launch.json` starts
   an Extension Development Host with this folder as the development extension.
 - `npm test` (`node --test`) runs the symbol scanner's tests, the lint pass's, the
   diagnostics' and the completion and signature-help providers' wiring against a stub
-  `vscode`, the Testing panel's tests, and the notebook's tests: its file format and
-  controller against a stub `vscode`, and its cell protocol against the real interpreter.
-  Those tests skip when `../3rd-party` has no interpreter and `MINISCRIPT_EXE_PATH` is
-  unset.
+  `vscode`, the Testing panel's tests, the notebook's tests: its file format and
+  controller against a stub `vscode`, and its cell protocol against the real interpreter,
+  and the GRFON grammar's, tokenized with `vscode-textmate` and `vscode-oniguruma`. The
+  interpreter tests skip when `../3rd-party` has no interpreter and
+  `MINISCRIPT_EXE_PATH` is unset; the grammar test also reads `../services/*.grfon` when
+  the extension sits inside the project, and skips that half when it does not.
 - `npm run test:editor` launches a real VS Code with this folder as the development
   extension and `e2e/fixtures` as the workspace, then checks one hover, one completion, one
   diagnostic and one semantic token through the editor's own commands — the wiring

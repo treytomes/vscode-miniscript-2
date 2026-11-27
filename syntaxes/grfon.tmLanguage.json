@@ -1,0 +1,90 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GRFON",
+  "scopeName": "source.grfon",
+  "fileTypes": ["grfon"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#key" },
+    { "include": "#escapes" },
+    { "include": "#placeholders" },
+    { "include": "#references" },
+    { "include": "#terms" },
+    { "include": "#numbers" },
+    { "include": "#literals" },
+    { "include": "#punctuation" }
+  ],
+  "repository": {
+    "comments": {
+      "match": "(?<!:)//.*$",
+      "name": "comment.line.double-slash.grfon"
+    },
+    "key": {
+      "match": "(?:^|(?<=[{;:]))([ \\t]*)((?:(?:\\\\[^\\n])|/(?!/)|[^\\\\:;{}\\/\\n])+?)([ \\t]*)(:)(?!\\/)",
+      "captures": {
+        "2": { "name": "support.type.property-name.grfon" },
+        "4": { "name": "punctuation.separator.key-value.grfon" }
+      }
+    },
+    "escapes": {
+      "patterns": [
+        {
+          "match": "\\\\u[0-9A-Fa-f]{4}",
+          "name": "constant.character.escape.unicode.grfon"
+        },
+        {
+          "match": "\\\\[^\\n]",
+          "name": "constant.character.escape.grfon"
+        }
+      ]
+    },
+    "placeholders": {
+      "match": "<[A-Za-z_][A-Za-z0-9_-]*>",
+      "name": "variable.parameter.placeholder.grfon"
+    },
+    "references": {
+      "match": "(@)([A-Za-z_][A-Za-z0-9_-]*)(?:\\(([^)\\n]*)\\))?",
+      "captures": {
+        "1": { "name": "punctuation.definition.reference.grfon" },
+        "2": { "name": "variable.other.reference.grfon" },
+        "3": { "name": "variable.parameter.argument.grfon" }
+      }
+    },
+    "terms": {
+      "patterns": [
+        {
+          "match": "\\$[A-Za-z0-9_.\\[\\]]*",
+          "name": "variable.other.path.grfon"
+        },
+        {
+          "match": "\\?[A-Za-z_][A-Za-z0-9_-]*",
+          "name": "variable.parameter.term.grfon"
+        }
+      ]
+    },
+    "numbers": {
+      "match": "(?:^[ \\t]*|(?<=[{;:])[ \\t]*)(-?(?:\\d+(?:\\.\\d*)?|\\.\\d+)(?:[eE][+-]?\\d+)?%?)(?=[ \\t]*(?:[;}]|$|//))",
+      "captures": {
+        "1": { "name": "constant.numeric.grfon" }
+      }
+    },
+    "literals": {
+      "match": "(?:^[ \\t]*|(?<=[{;:])[ \\t]*)(null)(?=[ \\t]*(?:[;}]|$|//))",
+      "captures": {
+        "1": { "name": "constant.language.null.grfon" }
+      }
+    },
+    "punctuation": {
+      "patterns": [
+        {
+          "match": "[{}]",
+          "name": "punctuation.section.braces.grfon"
+        },
+        {
+          "match": ";",
+          "name": "punctuation.separator.list.grfon"
+        }
+      ]
+    }
+  }
+}

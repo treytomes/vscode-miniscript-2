@@ -1,8 +1,8 @@
 {
   "name": "miniscript2",
   "displayName": "MiniScript 2",
-  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting, a run button, notebooks, and the test suite in the Testing panel.",
-  	"version": "0.20.3",
+  "description": "MiniScript 2 language support for Visual Studio Code: syntax highlighting for MiniScript and GRFON, a run button, notebooks, and the test suite in the Testing panel.",
+  	"version": "0.21.0",
   "publisher": "micro-expert",
   "private": true,
   "license": "MIT",
@@ -28,7 +28,8 @@
   "keywords": [
     "miniscript",
     "miniscript 2",
-    "ms"
+    "ms",
+    "grfon"
   ],
   "contributes": {
     "languages": [
@@ -43,6 +44,16 @@
           ".ms"
         ],
         "configuration": "./language-configuration.json"
+      },
+      {
+        "id": "grfon",
+        "aliases": [
+          "GRFON"
+        ],
+        "extensions": [
+          ".grfon"
+        ],
+        "configuration": "./grfon-language-configuration.json"
       }
     ],
     "grammars": [
@@ -50,6 +61,11 @@
         "language": "miniscript",
         "scopeName": "source.miniscript",
         "path": "./syntaxes/miniscript.tmLanguage.json"
+      },
+      {
+        "language": "grfon",
+        "scopeName": "source.grfon",
+        "path": "./syntaxes/grfon.tmLanguage.json"
       }
     ],
     "semanticTokenTypes": [
@@ -155,6 +171,8 @@
   },
   "devDependencies": {
     "@vscode/test-electron": "^3.1.0",
-    "mocha": "^12.0.3"
+    "mocha": "^12.0.3",
+    "vscode-oniguruma": "^2.0.1",
+    "vscode-textmate": "^9.3.2"
   }
 }
