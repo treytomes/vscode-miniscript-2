@@ -1,11 +1,14 @@
 // e2e/smoke.js — one check per answer the extension gives, asked of the editor instead of
 // the providers' own functions: a hover, a completion after a dot, a diagnostic the file
-// earns on open, and a semantic token. They read e2e/fixtures/smoke.ms.
+// earns on open, a semantic token, and the GRFON language a .grfon document opens as. They
+// read e2e/fixtures/smoke.ms and e2e/fixtures/sample.grfon.
 const assert = require("node:assert/strict");
+const fs = require("node:fs");
 const path = require("node:path");
 const vscode = require("vscode");
 
 const FIXTURE = path.resolve(__dirname, "fixtures", "smoke.ms");
+const GRFON_FIXTURE = path.resolve(__dirname, "fixtures", "sample.grfon");
 const WAIT = 10000;
 
 let document;
@@ -101,5 +104,30 @@ suite("the extension in an editor", () => {
 		assert.ok(declaration, "`abs` is a token");
 		assert.equal(declaration.type, 1, "of type function, the legend's second entry");
 		assert.equal(declaration.modifiers & 1, 1, "and marked a declaration");
+	});
+
+	// The grammar tests read the grammar file themselves; this asks the editor whether a .grfon
+	// file becomes this extension's language, and whether the files its manifest names are there.
+	// It comes last because showing this document leaves a different editor active.
+	test("a .grfon document opens as GRFON, with its grammar contributed", async () => {
+		const grfon = await vscode.workspace.openTextDocument(vscode.Uri.file(GRFON_FIXTURE));
+		await vscode.window.showTextDocument(grfon);
+		assert.equal(grfon.languageId, "grfon", "a .grfon file is GRFON");
+
+		const extension = vscode.extensions.getExtension("micro-expert.miniscript2");
+		const language = extension.packageJSON.contributes.languages.find((entry) => entry.id === "grfon");
+		assert.ok(language, "the language is contributed");
+		assert.ok(language.configuration, "with a configuration file");
+		assert.ok(
+			fs.existsSync(path.join(extension.extensionPath, language.configuration)),
+			"the configuration file is where the manifest says it is"
+		);
+
+		const grammar = extension.packageJSON.contributes.grammars.find((entry) => entry.language === "grfon");
+		assert.ok(grammar, "a grammar is contributed for it");
+		assert.equal(grammar.scopeName, "source.grfon");
+		const file = path.join(extension.extensionPath, grammar.path);
+		assert.ok(fs.existsSync(file), "the grammar file is where the manifest says it is");
+		assert.match(fs.readFileSync(file, "utf8"), /"scopeName": "source\.grfon"/, "and carries the manifest's scope");
 	});
 });

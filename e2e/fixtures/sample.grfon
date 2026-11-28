@@ -1,0 +1,48 @@
+// The declaration the editor smoke test opens: the groups, takes, references and escapes
+// a provider document is made of.
+service: example.api
+base: https://api.example.com/v1
+
+groups: {
+  // A group of parameters, used by name below.
+  details: {
+    params: {
+      {name: details; type: bool; default: 1; doc: Include the detail fields.}
+    }
+  }
+  // A group that takes an argument, and the two places it names it.
+  windowDays: {
+    takes: {most}
+    params: {
+      {name: days; type: int; min: 1; max: <most>; doc: Days to include, 1 to <most>.}
+    }
+  }
+  // The facts a place earns, one of them with an escaped colon.
+  placeFacts: {
+    facts: {
+      {has-name; ?place; $.name};
+      {has-name-in-fr; ?place; $.name\:fr};
+      {has-latitude; ?place; $.lat as number}
+    }
+  }
+  // A reply group, which is what an endpoint's reply names.
+  placeReply: {
+    reply: {
+      facts: @placeFacts
+      label: {name: {name; localname}}
+    }
+  }
+}
+
+endpoints: {
+  search: {
+    method: GET
+    path: /search
+    params: {@details; @windowDays(7); {name: q; type: text; doc: Free-form query.}}
+    reply: {
+      use: @placeReply
+      each: $
+      confirm: {has-name: name}
+    }
+  }
+}
